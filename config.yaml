@@ -1,0 +1,16 @@
+# Transcriber configuration
+
+# Push-to-talk hotkey (hold to record, release to transcribe)
+hotkey: ctrl+shift+space
+
+# Audio recording settings
+audio:
+  sample_rate: 16000
+  channels: 1
+  # device: null  # null = system default microphone
+
+# Whisper model settings
+whisper:
+  model_size: large-v3    # Options: tiny, base, small, medium, large-v2, large-v3
+  device: cuda             # Options: cuda, cpu
+  compute_type: float16    # Options: float16 (GPU), int8 (CPU), float32
