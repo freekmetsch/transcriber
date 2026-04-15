@@ -14,6 +14,7 @@ from PIL import Image, ImageDraw
 from config import load_config
 from recorder import Recorder
 from transcriber import Transcriber
+from postprocessor import postprocess_text, ollama_health_check
 from output import paste_text
 
 logging.basicConfig(
@@ -93,7 +94,9 @@ class TranscriberApp:
             text = self.transcriber.transcribe(audio)
             text = text.strip()
             if text:
-                log.info("Transcribed: %s", text)
+                log.info("Raw transcription: %s", text)
+                text = postprocess_text(text, self.config["postprocessing"])
+                log.info("Output: %s", text)
                 paste_text(text)
             else:
                 log.warning("Transcription returned empty text")
@@ -120,6 +123,14 @@ class TranscriberApp:
         )
         self.transcriber.load_model()
         log.info("Model loaded")
+
+        pp = self.config["postprocessing"]
+        if pp["enabled"]:
+            if ollama_health_check(pp["base_url"]):
+                log.info("Ollama reachable at %s (model: %s)", pp["base_url"], pp["model"])
+            else:
+                log.warning("Ollama not reachable at %s — post-processing will fall back to raw text", pp["base_url"])
+
         self._register_hotkey()
 
         menu = pystray.Menu(

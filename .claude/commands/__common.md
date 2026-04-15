@@ -38,11 +38,12 @@ AI-first software engineer. Optimize for model reasoning, regeneration, and debu
 | `config.yaml` | User configuration (hotkey, audio, whisper settings) |
 | `requirements.txt` | Python dependencies |
 
+| `postprocessor.py` | Ollama /api/chat post-processing with fallback to raw text |
+| `commands.py` | Formatting command definitions (EN + NL bilingual) |
+
 ## Future Files (not yet created)
 | File | Purpose | Phase |
 |------|---------|-------|
-| `postprocessor.py` | Ollama LLM post-processing pipeline | Phase 2 |
-| `commands.py` | Formatting command definitions (EN + NL) | Phase 2 |
 | `brain.py` | SQLite vocabulary database, CRUD operations | Phase 3 |
 | `learning.py` | Correction tracking, auto-learning logic | Phase 3 |
 | `prompt_builder.py` | Generate initial_prompt from vocabulary | Phase 3 |

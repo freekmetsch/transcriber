@@ -19,6 +19,12 @@ DEFAULT_CONFIG = {
         "device": "cuda",
         "compute_type": "float16",
     },
+    "postprocessing": {
+        "enabled": True,
+        "model": "qwen2.5:3b",
+        "base_url": "http://localhost:11434",
+        "timeout": 10,
+    },
 }
 
 CONFIG_PATH = Path(__file__).parent / "config.yaml"
@@ -43,6 +49,6 @@ def load_config() -> dict:
         config = _deep_merge(DEFAULT_CONFIG, user_config)
         log.info("Loaded config from %s", CONFIG_PATH)
     else:
-        config = _deep_merge(DEFAULT_CONFIG, {})
+        config = _deep_merge(DEFAULT_CONFIG, {})  # shallow copy with nested dicts
         log.info("Using default config (no config.yaml found)")
     return config

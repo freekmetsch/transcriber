@@ -1,7 +1,7 @@
 # Feature List: Personal Transcriber — Cross-Platform Voice-to-Text
 
 Date: 2026-04-15
-Status: In Progress (Phase 1 complete)
+Status: In Progress (Phase 2 complete)
 Scope: Windows desktop app + Android voice input service + shared vocabulary brain
 Owner: Freek
 
@@ -469,7 +469,7 @@ Reason: The user code-switches, so formatting commands may come in either langua
 
 **Goal**: Build a personal cross-platform voice-to-text system with Dutch+English code-switching support, vocabulary learning, and LLM post-processing.
 
-**Current state**: Phase 1 (Desktop MVP) complete. All source files written, reviewed via `/simplify`, and syntax-checked.
+**Current state**: Phase 2 (LLM Post-Processing) complete. All source files written, reviewed via `/simplify`, and syntax-checked.
 
 **What was built (Phase 1)**:
 - `app.py` — System tray app with push-to-talk hotkey (Ctrl+Shift+Space)
@@ -481,17 +481,27 @@ Reason: The user code-switches, so formatting commands may come in either langua
 - `requirements.txt` — Python dependencies
 - `.gitignore` — Standard ignores
 
+**What was built (Phase 2)**:
+- `postprocessor.py` — Ollama /api/chat integration with connection reuse (requests.Session), graceful fallback to raw text on any failure
+- `commands.py` — Formatting command definitions: EN + NL bilingual (period/punt, comma/komma, new line/nieuwe regel, etc.)
+- `app.py` — Modified: post-processing inserted after transcription, Ollama health check on startup
+- `config.py` — Modified: postprocessing defaults added (enabled, model, base_url, timeout)
+- `config.yaml` — Modified: postprocessing section added
+- `requirements.txt` — Modified: added `requests>=2.31.0`
+
 **Before first run**:
 1. Create venv: `python -m venv venv && venv\Scripts\activate`
 2. Install deps: `pip install -r requirements.txt`
 3. Ensure CUDA toolkit is installed for GPU acceleration
-4. Run: `python app.py`
-5. Whisper model downloads automatically on first run (~3 GB for large-v3)
+4. Ensure Ollama is running: `ollama serve`
+5. Pull the post-processing model: `ollama pull qwen2.5:3b`
+6. Run: `python app.py`
+7. Whisper model downloads automatically on first run (~3 GB for large-v3)
 
 **Resolved user input**:
 - Q2: Push-to-talk with Ctrl+Shift+Space (confirmed)
 - Q6: Syncthing already running between phone and PC (confirmed)
 
-**Next step**: Phase 2 (LLM Post-Processing Pipeline). Adds Ollama integration for punctuation, formatting commands, and code-switch cleanup. Prerequisites: `ollama serve` + `ollama pull qwen2.5:3b`.
+**Next step**: Phase 3 (Vocabulary Brain). Adds SQLite vocabulary database, Whisper prompt conditioning via initial_prompt, correction tracking with auto-learning, and manual vocabulary management.
 
-**Next command**: `/run` (Phase 2)
+**Next command**: `/run` (Phase 3)
