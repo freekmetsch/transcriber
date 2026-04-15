@@ -31,6 +31,9 @@ DEFAULT_CONFIG = {
         "auto_learn_threshold": 3,
         "prompt_max_chars": 500,
         "correction_hotkey": "ctrl+shift+c",
+        "correction_mode": "auto",
+        "correction_timeout": 8,
+        "notifications": True,
     },
 }
 

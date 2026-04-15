@@ -1,7 +1,7 @@
 # Feature List: Personal Transcriber — Cross-Platform Voice-to-Text
 
 Date: 2026-04-15
-Status: In Progress (Phase 3 complete)
+Status: In Progress (Phase 3.5 complete)
 Scope: Windows desktop app + Android voice input service + shared vocabulary brain
 Owner: Freek
 
@@ -469,7 +469,7 @@ Reason: The user code-switches, so formatting commands may come in either langua
 
 **Goal**: Build a personal cross-platform voice-to-text system with Dutch+English code-switching support, vocabulary learning, and LLM post-processing.
 
-**Current state**: Phase 3 (Vocabulary Brain) complete. All source files written, tested (59/59 passing), and syntax-checked.
+**Current state**: Phase 3.5 (UX Polish) complete. All source files written, tested (59/59 passing), and syntax-checked. See FEATURE_LIST_UX_POLISH.md for Phase 3.5 details.
 
 **What was built (Phase 1)**:
 - `app.py` — System tray app with push-to-talk hotkey (Ctrl+Shift+Space)

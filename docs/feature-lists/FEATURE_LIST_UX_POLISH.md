@@ -1,7 +1,7 @@
 # Feature List: Phase 3.5 — UX Polish for Vocabulary Brain
 
 Date: 2026-04-15
-Status: Planned
+Status: Complete
 Scope: Desktop UX improvements to make the vocabulary brain usable day-to-day
 Owner: Freek
 
@@ -343,16 +343,21 @@ Default: No — single add for now. Reason: `python vocab.py import terms.json` 
 
 **Goal**: Polish the vocabulary brain UX so corrections flow naturally and the brain actually learns.
 
-**Current state**: Planned. Phase 3 backend complete (59/59 tests). This phase is pure UI/UX.
+**Current state**: Complete. All 5 sub-phases implemented and syntax-checked.
 
-**What gets built**: Auto-show correction window, quick-add vocab button, Windows toast notifications, tray-accessible vocabulary manager, dynamic tray menu.
+**What was built (Phase 3.5)**:
+- `correction_ui.py` — Rewritten: auto-show/hide with configurable timeout, no-focus passive mode (doesn't steal keystrokes from target app), quick-add vocabulary panel (Ctrl+Shift+A), position near system tray, auto-hide cancels on user interaction
+- `notifications.py` — New: winotify wrapper for native Windows 10/11 toast notifications (auto-learned terms, Ollama fallback once-per-session, vocabulary import). Graceful no-op if winotify not installed.
+- `vocab_ui.py` — New: Tkinter Toplevel vocabulary manager (dark theme, scrollable Treeview, add/remove/toggle-priority/export/import via native file dialogs). Shares Tk root with correction window.
+- `app.py` — Rewired: auto-show correction after transcription (respects correction_mode setting), notifications on auto-learn/Ollama fallback/import, "Manage vocabulary..." in tray menu, dynamic tray menu rebuilds on vocabulary changes, tooltip shows live term count
+- `config.py` — Added defaults: correction_mode (auto), correction_timeout (8), notifications (true)
+- `config.yaml` — Added settings: correction_mode, correction_timeout, notifications
+- `requirements.txt` — Added winotify>=1.1.0
 
-**Key files**: `correction_ui.py` (major changes), `notifications.py` (new), `vocab_ui.py` (new), `app.py` (wiring), `config.py`/`config.yaml` (new settings).
+**Resolved open questions**: Q8 (auto-show: yes, default), Q9 (silent notifications: yes), Q10 (no bulk add in GUI).
 
 **Dependencies**: `winotify>=1.1.0` (optional, for toast notifications).
 
-**Before first run**: Same as Phase 3. Optionally `pip install winotify` for toast notifications.
+**Next step**: Phase 4 (Android Voice Input Service) or manual smoke test on desktop PC.
 
-**First command**: `/run`
-
-**First files to touch**: `config.py` (add defaults) → `correction_ui.py` (auto-show/hide) → `notifications.py` (new) → `vocab_ui.py` (new) → `app.py` (wire everything).
+**Next command**: `/run` (Phase 4)

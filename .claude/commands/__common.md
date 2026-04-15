@@ -40,6 +40,8 @@ AI-first software engineer. Optimize for model reasoning, regeneration, and debu
 
 | `postprocessor.py` | Ollama /api/chat post-processing with fallback to raw text |
 | `commands.py` | Formatting command definitions (EN + NL bilingual) |
+| `notifications.py` | Windows toast notifications (winotify wrapper, graceful fallback) |
+| `vocab_ui.py` | Vocabulary manager Toplevel window (tray-accessible) |
 
 ## Future Files (not yet created)
 | File | Purpose | Phase |

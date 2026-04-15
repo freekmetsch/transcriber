@@ -29,3 +29,6 @@ brain:
   auto_learn_threshold: 3  # Corrections needed before auto-adding to vocabulary
   prompt_max_chars: 500    # Max characters for Whisper initial_prompt
   correction_hotkey: ctrl+shift+c  # Hotkey to open correction window
+  correction_mode: auto            # auto | hotkey | off
+  correction_timeout: 8            # Seconds before auto-hiding (0 = no auto-hide)
+  notifications: true              # Windows toast notifications for brain events

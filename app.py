@@ -62,16 +62,20 @@ class TranscriberApp:
         # Brain (vocabulary database) — initialized if enabled
         self._brain = None
         self._correction_ui = None
+        self._vocab_manager = None
         self._initial_prompt: str = ""
         self._vocabulary_text: str = ""
         self._last_transcription: str = ""
+
+        # Notifications
+        self._notifications_enabled = False
 
         brain_cfg = self.config["brain"]
         if brain_cfg["enabled"]:
             self._init_brain(brain_cfg)
 
     def _init_brain(self, brain_cfg: dict):
-        """Initialize the vocabulary brain and correction UI."""
+        """Initialize the vocabulary brain, correction UI, vocab manager, and notifications."""
         from brain import VocabularyBrain
         from prompt_builder import get_or_build_prompt, get_vocabulary_for_llm
         from correction_ui import CorrectionWindow
@@ -92,9 +96,31 @@ class TranscriberApp:
             log.info("Loaded %d vocabulary terms for post-processing", self._vocabulary_text.count("\n") + 1)
 
         # Correction UI
-        self._correction_ui = CorrectionWindow(on_correction=self._on_correction)
+        self._correction_ui = CorrectionWindow(
+            on_correction=self._on_correction,
+            on_vocab_add=self._on_vocab_add,
+        )
         self._correction_ui.start()
-        log.info("Correction UI ready")
+        log.info("Correction UI ready (mode: %s)", brain_cfg["correction_mode"])
+
+        # Vocabulary manager (uses the same Tk root)
+        if self._correction_ui._root:
+            from vocab_ui import VocabularyManager
+            self._vocab_manager = VocabularyManager(
+                self._correction_ui._root,
+                self._brain,
+                on_change=self._on_vocab_change,
+            )
+            log.info("Vocabulary manager ready")
+
+        # Notifications
+        self._notifications_enabled = brain_cfg.get("notifications", True)
+        if self._notifications_enabled:
+            import notifications
+            if notifications.is_available():
+                log.info("Toast notifications enabled")
+            else:
+                log.info("Toast notifications unavailable (winotify not installed)")
 
     def _on_correction(self, original: str, corrected: str):
         """Callback from correction UI — log correction and check auto-learning."""
@@ -113,6 +139,12 @@ class TranscriberApp:
         if learned:
             for entry in learned:
                 log.info("Auto-learned term: %s (was: %s)", entry["term"], entry["phonetic_hint"])
+                if self._notifications_enabled:
+                    import notifications
+                    notifications.notify_auto_learned(
+                        entry["term"], entry["phonetic_hint"],
+                        brain_cfg["auto_learn_threshold"],
+                    )
             # Rebuild prompts since vocabulary changed
             self._initial_prompt = get_or_build_prompt(
                 self._brain,
@@ -120,6 +152,42 @@ class TranscriberApp:
                 force_rebuild=True,
             )
             self._vocabulary_text = get_vocabulary_for_llm(self._brain)
+            self._refresh_tray_menu()
+
+    def _on_vocab_add(self, term: str, hint: str | None, priority: str):
+        """Callback from correction UI quick-add panel."""
+        if self._brain is None:
+            return
+        from prompt_builder import get_or_build_prompt, get_vocabulary_for_llm
+
+        self._brain.add_term(term, phonetic_hint=hint, priority=priority)
+        log.info("Quick-added vocab: %s (hint=%s, priority=%s)", term, hint, priority)
+
+        if self._notifications_enabled:
+            import notifications
+            notifications.notify_vocab_added(term)
+
+        # Rebuild prompts
+        brain_cfg = self.config["brain"]
+        self._initial_prompt = get_or_build_prompt(
+            self._brain, max_chars=brain_cfg["prompt_max_chars"], force_rebuild=True
+        )
+        self._vocabulary_text = get_vocabulary_for_llm(self._brain)
+        self._refresh_tray_menu()
+
+    def _on_vocab_change(self):
+        """Callback from vocabulary manager — rebuild prompts and refresh tray."""
+        if self._brain is None:
+            return
+        from prompt_builder import get_or_build_prompt, get_vocabulary_for_llm
+
+        brain_cfg = self.config["brain"]
+        self._initial_prompt = get_or_build_prompt(
+            self._brain, max_chars=brain_cfg["prompt_max_chars"], force_rebuild=True
+        )
+        self._vocabulary_text = get_vocabulary_for_llm(self._brain)
+        self._refresh_tray_menu()
+        log.info("Vocabulary changed — prompts rebuilt, tray refreshed")
 
     def _open_correction_window(self):
         """Open the correction window with the last transcription."""
@@ -128,12 +196,34 @@ class TranscriberApp:
         elif not self._last_transcription:
             log.debug("No transcription to correct")
 
+    def _show_correction_auto(self, text: str):
+        """Auto-show the correction window after transcription (non-focused)."""
+        if self._correction_ui is None:
+            return
+        brain_cfg = self.config["brain"]
+        mode = brain_cfg.get("correction_mode", "auto")
+        if mode == "auto":
+            timeout = brain_cfg.get("correction_timeout", 8)
+            self._correction_ui.show_passive(text, timeout=timeout)
+        # In "hotkey" or "off" mode, don't auto-show
+
+    def _open_vocab_manager(self, icon=None, item=None):
+        """Open the vocabulary manager window from tray menu."""
+        if self._vocab_manager:
+            self._vocab_manager.schedule_show()
+
     def _update_icon(self, recording: bool):
         if self._icon is not None:
             self._icon.icon = _ICON_RECORDING if recording else _ICON_IDLE
             self._icon.title = (
-                "Transcriber — Recording..." if recording else "Transcriber"
+                "Transcriber — Recording..." if recording else self._tray_tooltip()
             )
+
+    def _tray_tooltip(self) -> str:
+        """Build tray icon tooltip with vocabulary count."""
+        if self._brain is not None:
+            return f"Transcriber — {self._brain.term_count()} terms"
+        return "Transcriber"
 
     def _start_recording(self):
         with self._lock:
@@ -166,14 +256,23 @@ class TranscriberApp:
             text = text.strip()
             if text:
                 log.info("Raw transcription: %s", text)
-                text = postprocess_text(
+                result = postprocess_text(
                     text,
                     self.config["postprocessing"],
                     vocabulary_text=self._vocabulary_text,
                 )
-                log.info("Output: %s", text)
-                self._last_transcription = text
-                paste_text(text)
+                # Check if postprocessing fell back to raw text
+                if result == text and self.config["postprocessing"]["enabled"]:
+                    if self._notifications_enabled:
+                        import notifications
+                        notifications.notify_ollama_fallback()
+
+                log.info("Output: %s", result)
+                self._last_transcription = result
+                paste_text(result)
+
+                # Auto-show correction window if configured
+                self._show_correction_auto(result)
             else:
                 log.warning("Transcription returned empty text")
         except Exception:
@@ -185,11 +284,14 @@ class TranscriberApp:
         keyboard.on_release_key(self._trigger_key, self._on_trigger_release)
         log.info("Hotkey registered: %s (push-to-talk)", hotkey)
 
-        # Register correction hotkey if brain is enabled
+        # Register correction hotkey if brain is enabled and mode is not "off"
         if self._brain is not None:
-            corr_hotkey = self.config["brain"]["correction_hotkey"]
-            keyboard.add_hotkey(corr_hotkey, self._open_correction_window, suppress=True)
-            log.info("Correction hotkey registered: %s", corr_hotkey)
+            brain_cfg = self.config["brain"]
+            mode = brain_cfg.get("correction_mode", "auto")
+            if mode != "off":
+                corr_hotkey = brain_cfg["correction_hotkey"]
+                keyboard.add_hotkey(corr_hotkey, self._open_correction_window, suppress=True)
+                log.info("Correction hotkey registered: %s", corr_hotkey)
 
     def _export_vocabulary(self, icon, item):
         """Export vocabulary to JSON file."""
@@ -209,14 +311,72 @@ class TranscriberApp:
         if not import_path.exists():
             log.warning("No brain_export.json found at %s", import_path)
             return
+
+        count_before = self._brain.term_count()
         self._brain.import_from_file(import_path)
+        count_after = self._brain.term_count()
+        imported = count_after - count_before
+
         # Rebuild prompts
         brain_cfg = self.config["brain"]
         self._initial_prompt = get_or_build_prompt(
             self._brain, max_chars=brain_cfg["prompt_max_chars"], force_rebuild=True
         )
         self._vocabulary_text = get_vocabulary_for_llm(self._brain)
+
+        if self._notifications_enabled and imported > 0:
+            import notifications
+            notifications.notify_vocab_imported(imported, "brain_export.json")
+
+        self._refresh_tray_menu()
         log.info("Vocabulary imported and prompts rebuilt")
+
+    def _build_tray_menu(self) -> pystray.Menu:
+        """Build the tray menu with current vocabulary count."""
+        menu_items = [
+            pystray.MenuItem("Transcriber", None, enabled=False),
+            pystray.Menu.SEPARATOR,
+        ]
+
+        if self._brain is not None:
+            brain_cfg = self.config["brain"]
+            mode = brain_cfg.get("correction_mode", "auto")
+            menu_items.extend([
+                pystray.MenuItem(
+                    lambda item: f"Vocabulary ({self._brain.term_count()} terms)",
+                    None, enabled=False,
+                ),
+                pystray.MenuItem(
+                    "Manage vocabulary...",
+                    self._open_vocab_manager,
+                ),
+            ])
+            if mode != "off":
+                menu_items.append(
+                    pystray.MenuItem(
+                        f"Correct last (  {brain_cfg['correction_hotkey']}  )",
+                        lambda icon, item: self._open_correction_window(),
+                    ),
+                )
+            menu_items.extend([
+                pystray.MenuItem("Export vocabulary", self._export_vocabulary),
+                pystray.MenuItem("Import vocabulary", self._import_vocabulary),
+                pystray.Menu.SEPARATOR,
+            ])
+
+        menu_items.append(pystray.MenuItem("Quit", self._quit))
+        return pystray.Menu(*menu_items)
+
+    def _refresh_tray_menu(self):
+        """Refresh the tray menu to update vocabulary count."""
+        if self._icon is not None:
+            self._icon.menu = self._build_tray_menu()
+            self._icon.title = self._tray_tooltip()
+            try:
+                self._icon.update_menu()
+            except Exception:
+                # pystray backend may not support update_menu — tooltip still updates
+                log.debug("Tray menu update not supported, tooltip updated instead")
 
     def _quit(self, icon, item):
         log.info("Shutting down")
@@ -246,33 +406,9 @@ class TranscriberApp:
 
         self._register_hotkey()
 
-        # Build tray menu
-        menu_items = [
-            pystray.MenuItem("Transcriber", None, enabled=False),
-            pystray.Menu.SEPARATOR,
-        ]
-
-        if self._brain is not None:
-            brain_cfg = self.config["brain"]
-            menu_items.extend([
-                pystray.MenuItem(
-                    f"Vocabulary ({self._brain.term_count()} terms)",
-                    None, enabled=False,
-                ),
-                pystray.MenuItem(
-                    f"Correct last (  {brain_cfg['correction_hotkey']}  )",
-                    lambda icon, item: self._open_correction_window(),
-                ),
-                pystray.MenuItem("Export vocabulary", self._export_vocabulary),
-                pystray.MenuItem("Import vocabulary", self._import_vocabulary),
-                pystray.Menu.SEPARATOR,
-            ])
-
-        menu_items.append(pystray.MenuItem("Quit", self._quit))
-        menu = pystray.Menu(*menu_items)
-
+        menu = self._build_tray_menu()
         self._icon = pystray.Icon(
-            "transcriber", _ICON_IDLE, "Transcriber", menu
+            "transcriber", _ICON_IDLE, self._tray_tooltip(), menu
         )
 
         brain_status = ""
