@@ -30,7 +30,7 @@ def _paste_text_locked(text: str):
 
     try:
         pyperclip.copy(text)
-        time.sleep(0.05)
+        time.sleep(0.15)
         pyautogui.hotkey("ctrl", "v")
         time.sleep(0.05)
     finally:

@@ -1,7 +1,7 @@
 # Feature List: Laptop Testing & Validation
 
 Date: 2026-04-15
-Status: Planned
+Status: In Progress
 Scope: Validate transcriber on laptop — toggle hotkey, paste output, Ollama fallback, circuit breaker
 Owner: Freek
 
@@ -85,7 +85,7 @@ If transcription appears in console but not in Notepad:
 
 2. **pyautogui blocked**: Some Windows security settings block `pyautogui.hotkey("ctrl", "v")`. Run in elevated terminal (Run as Administrator).
 
-3. **Clipboard race**: The 50ms delay before paste might not be enough. If needed, increase `time.sleep(0.05)` to `time.sleep(0.15)` in `output.py` line 33.
+3. **Clipboard race**: ~~The 50ms delay before paste might not be enough.~~ **Fixed** — increased pre-paste delay from 50ms to 150ms in `output.py` line 33. Re-test during T1.
 
 ---
 
@@ -200,7 +200,7 @@ The laptop has an RTX 5060 (8GB VRAM) but faster-whisper needs `cublas64_12.dll`
 
 **Goal**: Validate transcriber on laptop — toggle hotkey, paste, Ollama fallback, circuit breaker.
 
-**Current state**: App runs, toggle and fallback code are committed. First test showed rapid-fire toggle (fixed) and paste not reaching Notepad (needs investigation).
+**Current state**: App runs, toggle and fallback code are committed. First test showed rapid-fire toggle (fixed) and paste not reaching Notepad (pre-paste delay increased from 50ms to 150ms — re-test in T1).
 
 **What's ready**:
 - `config.local.yaml` on laptop with CPU whisper + remote/local Ollama
