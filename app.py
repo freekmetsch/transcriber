@@ -18,6 +18,7 @@ from recorder import Recorder
 from transcriber import Transcriber
 from postprocessor import postprocess_text, ollama_health_check
 from output import paste_text
+from recording_indicator import RecordingIndicator
 
 logging.basicConfig(
     level=logging.INFO,
@@ -67,6 +68,10 @@ class TranscriberApp:
         self._initial_prompt: str = ""
         self._vocabulary_text: str = ""
         self._last_transcription: str = ""
+
+        # Recording indicator (Win+H-style overlay)
+        self._recording_indicator = RecordingIndicator()
+        self._recording_indicator.start()
 
         # Notifications
         self._notifications_enabled = False
@@ -238,11 +243,13 @@ class TranscriberApp:
                 self._recording = False
                 log.info("Recording stopped (toggle)")
                 self._update_icon(False)
+                self._recording_indicator.hide()
                 threading.Thread(target=self._stop_and_transcribe, daemon=True).start()
             else:
                 self._recording = True
                 log.info("Recording started (toggle)")
                 self._update_icon(True)
+                self._recording_indicator.show()
                 self.recorder.start()
 
     def _stop_and_transcribe(self):
@@ -382,6 +389,7 @@ class TranscriberApp:
     def _quit(self, icon, item):
         log.info("Shutting down")
         keyboard.unhook_all()
+        self._recording_indicator.destroy()
         if self._correction_ui:
             self._correction_ui.destroy()
         if self._brain:
