@@ -1,4 +1,5 @@
 # Transcriber configuration
+# Machine-specific overrides go in config.local.yaml (gitignored)
 
 # Push-to-talk hotkey (hold to record, release to transcribe)
 hotkey: ctrl+shift+space

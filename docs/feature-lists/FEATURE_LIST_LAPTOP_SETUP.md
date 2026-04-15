@@ -1,32 +1,54 @@
-# Feature List: Laptop Setup — First Run on NVIDIA Desktop
+# Feature List: Laptop Setup — Remote LLM via Tailscale
 
 Date: 2026-04-15
 Status: Planned
-Scope: Set up the transcriber on the Windows laptop with NVIDIA GPU for daily use
+Scope: Run the transcriber on the laptop, connected to the desktop PC's Ollama via Tailscale
 Owner: Freek
 
 ---
 
 ## Problem Framing
 
-The transcriber codebase is complete through Phase 3.5 (vocabulary brain + UX polish). It has never been run end-to-end on real hardware with a real microphone. The laptop has an NVIDIA GPU with CUDA support — the primary target platform.
+The transcriber codebase is complete through Phase 3.5 (vocabulary brain + UX polish). It has been developed on the desktop PC (NVIDIA GPU, 16GB VRAM, Ollama running locally). Now the user wants to also run it on their laptop.
 
-This feature list covers everything needed to go from `git pull` to a working voice-to-text system on the laptop.
+The laptop doesn't need its own Ollama — the desktop PC's Ollama is already accessible over Tailscale (the same VPN mesh used by the `second-brain` Telegram bot). The laptop just needs to:
+1. Run Whisper locally for transcription (CPU mode with a smaller model)
+2. Connect to the desktop's Ollama at `100.103.79.95:11434` via Tailscale for post-processing
+3. Share the same vocabulary brain (via the committed `brain_export.json`)
+
+**No desktop-side setup needed** — Ollama is already listening on `0.0.0.0:11434`, firewall rules are in place, and Tailscale is running.
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────┐       Tailscale        ┌─────────────────────────┐
+│     LAPTOP (laptopfreek)    │  ───HTTP POST─────────► │  DESKTOP (desktop-4ej)  │
+│     100.69.232.50           │  100.103.79.95:11434    │  100.103.79.95          │
+│                             │                         │                         │
+│  Whisper (CPU, medium/small)│                         │  Ollama (qwen2.5:3b)    │
+│  Vocabulary brain (SQLite)  │  ◄──JSON response────── │  NVIDIA GPU, 16GB VRAM  │
+│  Correction UI              │                         │                         │
+└─────────────────────────────┘                         └─────────────────────────┘
+```
+
+**Same pattern as the `second-brain` bot** (`100.84.198.95`) which already reaches this Ollama instance over Tailscale.
 
 ---
 
 ## Prerequisites (verify before starting)
 
-- [ ] Windows laptop with NVIDIA GPU (CUDA-capable)
+- [ ] Laptop connected to Tailscale (`tailscale status` shows `laptopfreek`)
+- [ ] Desktop PC on and running Ollama (`curl http://100.103.79.95:11434/api/tags` works)
+- [ ] Python 3.12+ installed on the laptop
 - [ ] Physical microphone (USB, headset, or built-in laptop mic)
-- [ ] Python 3.12+ installed
-- [ ] Internet connection (for model downloads on first run)
 
 ---
 
-## Phase L1: Environment Setup
+## Phase L1: Laptop — Environment Setup
 
-**Goal**: Python venv with all dependencies, CUDA working.
+**Goal**: Python venv with all dependencies, Whisper working on CPU.
 **Risk tier**: R0
 **Estimated effort**: S (~15 min, mostly waiting for downloads)
 
@@ -43,19 +65,13 @@ This feature list covers everything needed to go from `git pull` to a working vo
   python -m venv venv
   venv\Scripts\activate
   pip install -r requirements.txt
-  pip install pytest  # for running tests
+  pip install pytest
   ```
 
-- [ ] **Verify CUDA is available to CTranslate2**
+- [ ] **Check if CUDA is available** (likely not on the laptop)
   ```bash
-  python -c "import ctranslate2; print(ctranslate2.get_cuda_device_count())"
+  python -c "import ctranslate2; print('CUDA devices:', ctranslate2.get_cuda_device_count())"
   ```
-  Expected: `1` (or more). If `0`, CUDA toolkit needs installing.
-
-- [ ] **Install CUDA Toolkit if needed**
-  - Download from https://developer.nvidia.com/cuda-toolkit
-  - Only needed if the above check returns 0
-  - Restart after install
 
 - [ ] **Run test suite**
   ```bash
@@ -64,41 +80,54 @@ This feature list covers everything needed to go from `git pull` to a working vo
   Expected: 59/59 passing.
 
 ### Verification
-- `ctranslate2.get_cuda_device_count()` returns >= 1
 - All tests pass
 
 ---
 
-## Phase L2: Ollama Setup
+## Phase L2: Laptop — Create Local Config
 
-**Goal**: Local LLM post-processing ready.
+**Goal**: Configure Whisper for CPU and Ollama for the desktop's Tailscale IP.
 **Risk tier**: R0
-**Estimated effort**: S (~10 min)
+**Estimated effort**: S (~2 min)
+
+The codebase supports `config.local.yaml` — a gitignored file that overrides `config.yaml` with machine-specific settings. This avoids git conflicts between desktop and laptop.
 
 ### Steps
 
-- [ ] **Install Ollama** (if not already installed)
-  - Download from https://ollama.com/download
-  - Or via winget: `winget install Ollama.Ollama`
+- [ ] **Create `config.local.yaml` on the laptop**
+  ```yaml
+  # Laptop overrides — Whisper on CPU, Ollama on desktop via Tailscale
+  whisper:
+    model_size: medium
+    device: cpu
+    compute_type: int8
 
-- [ ] **Start Ollama and pull the post-processing model**
-  ```bash
-  ollama serve          # if not already running
-  ollama pull qwen2.5:3b
+  postprocessing:
+    base_url: http://100.103.79.95:11434
+    timeout: 15
   ```
 
-- [ ] **Verify Ollama is reachable**
+- [ ] **Verify Ollama connectivity**
   ```bash
-  python -c "from postprocessor import ollama_health_check; print('OK' if ollama_health_check('http://localhost:11434') else 'FAIL')"
+  python -c "from postprocessor import ollama_health_check; print('OK' if ollama_health_check('http://100.103.79.95:11434') else 'FAIL')"
   ```
+
+### Model Size Guide (CPU mode)
+
+| Model | RAM Usage | Relative Speed (CPU) | Accuracy |
+|---|---|---|---|
+| `small` | ~500MB | Fast (~3-5s per utterance) | Good for short phrases |
+| `medium` | ~1.5GB | Moderate (~5-10s per utterance) | Good balance — **recommended** |
+| `large-v3` | ~3GB | Slow (~15-30s per utterance) | Best accuracy, but painful on CPU |
+
+Start with `medium`. Drop to `small` if latency is too high.
 
 ### Verification
-- `ollama list` shows `qwen2.5:3b`
-- Health check passes
+- Health check returns "OK"
 
 ---
 
-## Phase L3: Vocabulary Import
+## Phase L3: Laptop — Vocabulary Import
 
 **Goal**: Import the seeded vocabulary from the desktop.
 **Risk tier**: R0
@@ -114,11 +143,6 @@ This feature list covers everything needed to go from `git pull` to a working vo
   ```
   Expected: 7 terms (Freek, Claude Code, Anthropic, HeliBoard, Syncthing, Ollama, whisper).
 
-- [ ] **Add any laptop-specific terms** (optional)
-  ```bash
-  python vocab.py add "YourLaptopName" --hint "misheard" --priority normal
-  ```
-
 ### Verification
 - `python vocab.py stats` shows imported terms
 
@@ -126,9 +150,9 @@ This feature list covers everything needed to go from `git pull` to a working vo
 
 ## Phase L4: First Run and Smoke Test
 
-**Goal**: End-to-end dictation working.
+**Goal**: End-to-end dictation working, with post-processing on the desktop via Tailscale.
 **Risk tier**: R1
-**Estimated effort**: S (~15 min, includes first model download)
+**Estimated effort**: S (~15 min, includes first Whisper model download)
 
 ### Steps
 
@@ -136,113 +160,87 @@ This feature list covers everything needed to go from `git pull` to a working vo
   ```bash
   python -c "import sounddevice as sd; print([d['name'] for d in sd.query_devices() if d['max_input_channels'] > 0])"
   ```
-  Should list at least one input device.
 
-- [ ] **First run** (Whisper large-v3 downloads automatically, ~3GB, one-time)
+- [ ] **First run** (Whisper `medium` downloads automatically, ~1.5GB, one-time)
   ```bash
   python app.py
   ```
   Watch the console for:
-  - "Loading Whisper model 'large-v3' on cuda..."
-  - "Model loaded" (may take a few minutes on first run due to download)
-  - "Ollama reachable at ..."
-  - "Correction UI ready (mode: auto)"
+  - "Loading Whisper model 'medium' on cpu..."
+  - "Model loaded"
+  - "Ollama reachable at http://100.103.79.95:11434"
   - "Transcriber ready. Hold ctrl+shift+space to dictate."
 
 - [ ] **Test 1: English dictation**
-  - Open Notepad
-  - Hold Ctrl+Shift+Space, say "Hello, my name is Freek"
-  - Release hotkey
-  - Verify: text appears in Notepad, "Freek" spelled correctly
-  - Verify: correction window auto-shows near tray (8s timeout)
+  - Open Notepad, hold Ctrl+Shift+Space, say "Hello, my name is Freek"
+  - Verify: text appears, "Freek" correct, correction window auto-shows
 
 - [ ] **Test 2: Dutch dictation**
-  - Hold hotkey, say "Dit is een test van de transcriber"
-  - Verify: Dutch text appears correctly, not translated to English
+  - Say "Dit is een test van de transcriber"
+  - Verify: Dutch preserved, not translated
 
 - [ ] **Test 3: Mixed Dutch+English**
-  - Hold hotkey, say "Ik gebruik Claude Code voor mijn project"
-  - Verify: both languages preserved, "Claude Code" recognized
+  - Say "Ik gebruik Claude Code voor mijn project"
+  - Verify: both languages preserved
 
 - [ ] **Test 4: Formatting commands**
-  - Hold hotkey, say "Hello comma this is a test period new line next sentence"
-  - Verify: "Hello, this is a test.\nNext sentence" (or close)
+  - Say "Hello comma this is a test period new line next sentence"
 
 - [ ] **Test 5: Correction flow**
-  - If any transcription was wrong, press Ctrl+Shift+C
-  - Edit the text, press Enter
-  - Check console for "Correction accepted"
-  - Use quick-add vocab (Ctrl+Shift+A in correction window) for any new terms
+  - Press Ctrl+Shift+C, edit text, press Enter
 
-- [ ] **Test 6: Vocabulary manager**
-  - Right-click tray icon → "Manage vocabulary..."
-  - Verify window opens, shows imported terms
-  - Try add/remove/toggle priority
-
-- [ ] **Test 7: Toast notifications** (if winotify installed)
-  - Make 3 identical corrections → auto-learn should trigger → toast appears
-
-- [ ] **Test 8: Test in different apps**
-  - Browser text field
-  - VS Code
-  - Terminal
-  - Chat app (if available)
+- [ ] **Test 6: Desktop offline fallback**
+  - Disable Tailscale or turn off desktop
+  - Dictate — should still work with raw Whisper text (no post-processing)
+  - Reconnect — post-processing resumes automatically
 
 ### Verification
-- All 8 tests pass
-- Latency feels acceptable (target: <3s from hotkey release to text appearing)
-- Correction window doesn't steal focus from target app
+- All tests pass
+- Post-processing is visibly happening (formatted output, not raw)
+- Fallback works when desktop is unreachable
 
 ---
 
 ## Phase L5: Config Tuning (if needed)
 
-**Goal**: Optimize for this specific laptop.
-**Risk tier**: R1
+### If Whisper latency is too high on CPU
+- Try `model_size: small` in `config.local.yaml`
+- Set `OMP_NUM_THREADS` to match your CPU core count:
+  ```bash
+  set OMP_NUM_THREADS=8
+  python app.py
+  ```
 
-### If latency is too high
-- Try `model_size: medium` in config.yaml (faster, slightly less accurate)
-- Try `model_size: small` for very fast results
-
-### If microphone is wrong device
-- Set `audio.device` in config.yaml to the device index from `sounddevice.query_devices()`
-
-### If Ollama post-processing is slow
-- Increase `postprocessing.timeout` in config.yaml
-- Or try a smaller model: `ollama pull phi3:mini` then update config
+### If microphone is the wrong device
+- Set `audio.device` in `config.local.yaml` to the device index from `sounddevice.query_devices()`
 
 ### If correction window is annoying
-- Set `brain.correction_mode: hotkey` (only shows on Ctrl+Shift+C)
-- Or `brain.correction_mode: off` (disable entirely)
+- Add `brain.correction_mode: hotkey` to `config.local.yaml`
 
 ---
 
 ## Known Issues from Desktop Testing
 
-1. **"new line" command sent to LLM instead of handled by commands.py** — formatting commands may not be processed before post-processing in some cases. If this happens, the LLM may translate the command literally. Needs investigation if it reproduces on laptop.
+1. **"new line" command sometimes sent to LLM literally** — may not be processed before post-processing.
+2. **LLM sometimes translates Dutch to English** — qwen2.5:3b occasionally ignores the "do NOT translate" instruction.
+3. **"Claude Code" sometimes becomes "Claude Coat"** — phonetic hint may need a stronger prompt.
 
-2. **LLM sometimes translates Dutch to English** — the system prompt says "do NOT translate" but qwen2.5:3b occasionally does anyway. May need prompt tuning or a different model.
-
-3. **"Claude Code" sometimes becomes "Claude Coat"** — the vocabulary hint is "claud coat" which is the phonetic form. The LLM should correct it but doesn't always. May need a stronger prompt or explicit correction rule.
-
-These are prompt-tuning issues, not setup blockers. The system is fully functional — just needs polish.
+These are prompt-tuning issues, not setup blockers.
 
 ---
 
 ## Resume Pack
 
-**Goal**: Get the transcriber running on the NVIDIA laptop for daily use.
+**Goal**: Run the transcriber on the laptop, using the desktop's Ollama via Tailscale for post-processing.
 
-**Current state**: Planned. Codebase complete through Phase 3.5. Never run on real hardware.
+**Current state**: Codebase ready. `config.local.yaml` support added and gitignored. Desktop Ollama verified reachable at `100.103.79.95:11434` via Tailscale.
 
-**What was done on desktop**:
-- Python venv created, all deps verified
-- Ollama qwen2.5:3b pulled and tested
-- Vocabulary seeded: 7 terms (Freek, Claude Code, Anthropic, HeliBoard, Syncthing, Ollama, whisper)
-- Post-processing tested end-to-end with real Ollama model
-- 59/59 tests passing
-- brain_export.json committed to repo for laptop import
+**Desktop-side setup needed**: None. Ollama already on `0.0.0.0:11434`, firewall rules in place, Tailscale running.
 
-**First command on laptop**: `git pull` then follow Phase L1-L4 sequentially.
+**What to do on the laptop** (Phases L1–L4):
+1. `git pull` → create venv → install deps → run tests
+2. Create `config.local.yaml` with CPU whisper + `base_url: http://100.103.79.95:11434`
+3. `python vocab.py import brain_export.json`
+4. `python app.py` → smoke test
 
-**Estimated total time**: ~30-45 min (mostly waiting for model downloads).
+**Estimated total time**: ~25 min (mostly Whisper model download).

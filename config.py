@@ -38,6 +38,7 @@ DEFAULT_CONFIG = {
 }
 
 CONFIG_PATH = Path(__file__).parent / "config.yaml"
+LOCAL_CONFIG_PATH = Path(__file__).parent / "config.local.yaml"
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -52,13 +53,25 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 
 def load_config() -> dict:
-    """Load config.yaml and merge with defaults. Missing file is fine — defaults are used."""
+    """Load config, with optional local overrides for machine-specific settings.
+
+    Merge order: defaults → config.yaml → config.local.yaml
+    config.local.yaml is gitignored, so each machine can have its own overrides.
+    """
+    config = DEFAULT_CONFIG.copy()
+
     if CONFIG_PATH.exists():
         with open(CONFIG_PATH, encoding="utf-8") as f:
             user_config = yaml.safe_load(f) or {}
-        config = _deep_merge(DEFAULT_CONFIG, user_config)
+        config = _deep_merge(config, user_config)
         log.info("Loaded config from %s", CONFIG_PATH)
     else:
-        config = _deep_merge(DEFAULT_CONFIG, {})  # shallow copy with nested dicts
-        log.info("Using default config (no config.yaml found)")
+        log.info("No config.yaml found, using defaults")
+
+    if LOCAL_CONFIG_PATH.exists():
+        with open(LOCAL_CONFIG_PATH, encoding="utf-8") as f:
+            local_config = yaml.safe_load(f) or {}
+        config = _deep_merge(config, local_config)
+        log.info("Applied local overrides from %s", LOCAL_CONFIG_PATH)
+
     return config
