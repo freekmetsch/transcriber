@@ -6,6 +6,7 @@ Entry point: system tray icon, global hotkey, recording/transcription pipeline.
 import logging
 import sys
 import threading
+import time
 from pathlib import Path
 
 import keyboard
@@ -57,7 +58,7 @@ class TranscriberApp:
         self._recording = False
         self._lock = threading.Lock()
         self._icon: pystray.Icon | None = None
-        self._trigger_key = self.config["hotkey"].split("+")[-1].strip()
+        self._last_toggle_time: float = 0.0
 
         # Brain (vocabulary database) — initialized if enabled
         self._brain = None
@@ -225,23 +226,24 @@ class TranscriberApp:
             return f"Transcriber — {self._brain.term_count()} terms"
         return "Transcriber"
 
-    def _start_recording(self):
+    def _toggle_recording(self):
+        # Debounce: keyboard library fires repeatedly while keys are held
+        now = time.monotonic()
+        if now - self._last_toggle_time < 0.5:
+            return
+        self._last_toggle_time = now
+
         with self._lock:
             if self._recording:
-                return
-            self._recording = True
-        log.info("Recording started (push-to-talk)")
-        self._update_icon(True)
-        self.recorder.start()
-
-    def _on_trigger_release(self, event):
-        with self._lock:
-            if not self._recording:
-                return
-            self._recording = False
-        log.info("Recording stopped")
-        self._update_icon(False)
-        threading.Thread(target=self._stop_and_transcribe, daemon=True).start()
+                self._recording = False
+                log.info("Recording stopped (toggle)")
+                self._update_icon(False)
+                threading.Thread(target=self._stop_and_transcribe, daemon=True).start()
+            else:
+                self._recording = True
+                log.info("Recording started (toggle)")
+                self._update_icon(True)
+                self.recorder.start()
 
     def _stop_and_transcribe(self):
         audio = self.recorder.stop()
@@ -280,9 +282,8 @@ class TranscriberApp:
 
     def _register_hotkey(self):
         hotkey = self.config["hotkey"]
-        keyboard.add_hotkey(hotkey, self._start_recording, suppress=True)
-        keyboard.on_release_key(self._trigger_key, self._on_trigger_release)
-        log.info("Hotkey registered: %s (push-to-talk)", hotkey)
+        keyboard.add_hotkey(hotkey, self._toggle_recording, suppress=True)
+        log.info("Hotkey registered: %s (toggle)", hotkey)
 
         # Register correction hotkey if brain is enabled and mode is not "off"
         if self._brain is not None:
@@ -430,7 +431,7 @@ class TranscriberApp:
         if self._brain is not None:
             brain_status = f" Brain: {self._brain.term_count()} terms."
         log.info(
-            "Transcriber ready. Hold %s to dictate.%s",
+            "Transcriber ready. Press %s to start/stop dictation.%s",
             self.config["hotkey"], brain_status,
         )
         try:
