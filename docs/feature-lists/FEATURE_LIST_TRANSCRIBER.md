@@ -1,7 +1,7 @@
 # Feature List: Personal Transcriber — Cross-Platform Voice-to-Text
 
 Date: 2026-04-15
-Status: In Progress (Phase 2 complete)
+Status: In Progress (Phase 3 complete)
 Scope: Windows desktop app + Android voice input service + shared vocabulary brain
 Owner: Freek
 
@@ -469,7 +469,7 @@ Reason: The user code-switches, so formatting commands may come in either langua
 
 **Goal**: Build a personal cross-platform voice-to-text system with Dutch+English code-switching support, vocabulary learning, and LLM post-processing.
 
-**Current state**: Phase 2 (LLM Post-Processing) complete. All source files written, reviewed via `/simplify`, and syntax-checked.
+**Current state**: Phase 3 (Vocabulary Brain) complete. All source files written, tested (59/59 passing), and syntax-checked.
 
 **What was built (Phase 1)**:
 - `app.py` — System tray app with push-to-talk hotkey (Ctrl+Shift+Space)
@@ -489,19 +489,41 @@ Reason: The user code-switches, so formatting commands may come in either langua
 - `config.yaml` — Modified: postprocessing section added
 - `requirements.txt` — Modified: added `requests>=2.31.0`
 
+**What was built (Phase 3)**:
+- `brain.py` — SQLite vocabulary database (WAL mode, thread-safe, CRUD for vocabulary/corrections/settings, JSON export/import)
+- `prompt_builder.py` — Generates Whisper `initial_prompt` from vocabulary DB (high-priority terms first, character budget, caching)
+- `learning.py` — Correction tracking with auto-learning (word-level diff, configurable threshold, auto-promotes repeated corrections to vocabulary)
+- `correction_ui.py` — Tkinter floating correction window (dark theme, Enter to accept, Escape to dismiss, Shift+Enter for newlines)
+- `vocab.py` — CLI tool for vocabulary management (add/remove/list/export/import/stats)
+- `transcriber.py` — Modified: accepts `initial_prompt` parameter to bias Whisper decoder
+- `postprocessor.py` — Modified: dynamically includes vocabulary terms in LLM system prompt
+- `app.py` — Modified: initializes brain on startup, wires prompt conditioning into transcription, correction hotkey (Ctrl+Shift+C), vocabulary export/import in tray menu, proper cleanup on shutdown
+- `config.py` — Modified: brain defaults added (enabled, db_path, auto_learn_threshold, prompt_max_chars, correction_hotkey)
+- `config.yaml` — Modified: brain section added
+- `tests/test_brain.py` — 31 tests for database CRUD, corrections, caching, settings, JSON export/import, WAL mode
+- `tests/test_prompt_builder.py` — 12 tests for prompt building, caching, vocabulary formatting
+- `tests/test_learning.py` — 14 tests for correction tracking, auto-learning threshold, word-level diff
+- `tests/conftest.py` — Pytest config for imports
+
 **Before first run**:
 1. Create venv: `python -m venv venv && venv\Scripts\activate`
 2. Install deps: `pip install -r requirements.txt`
-3. Ensure CUDA toolkit is installed for GPU acceleration
-4. Ensure Ollama is running: `ollama serve`
-5. Pull the post-processing model: `ollama pull qwen2.5:3b`
-6. Run: `python app.py`
-7. Whisper model downloads automatically on first run (~3 GB for large-v3)
+3. Install test deps: `pip install pytest`
+4. Ensure CUDA toolkit is installed for GPU acceleration
+5. Ensure Ollama is running: `ollama serve`
+6. Pull the post-processing model: `ollama pull qwen2.5:3b`
+7. Optionally seed vocabulary: `python vocab.py add "YourName" --hint "misheard-version" --priority high`
+8. Run: `python app.py`
+9. Whisper model downloads automatically on first run (~3 GB for large-v3)
+
+**Key hotkeys**:
+- `Ctrl+Shift+Space` — Push-to-talk (hold to record, release to transcribe)
+- `Ctrl+Shift+C` — Open correction window for last transcription
 
 **Resolved user input**:
 - Q2: Push-to-talk with Ctrl+Shift+Space (confirmed)
 - Q6: Syncthing already running between phone and PC (confirmed)
 
-**Next step**: Phase 3 (Vocabulary Brain). Adds SQLite vocabulary database, Whisper prompt conditioning via initial_prompt, correction tracking with auto-learning, and manual vocabulary management.
+**Next step**: Phase 4 (Android Voice Input Service). Kotlin RecognitionService app with whisper.cpp JNI, vocabulary integration, and post-processing.
 
-**Next command**: `/run` (Phase 3)
+**Next command**: `/run` (Phase 4)

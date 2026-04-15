@@ -46,16 +46,26 @@ class Transcriber:
                 raise
         log.info("Model loaded successfully")
 
-    def transcribe(self, audio: np.ndarray) -> str:
-        """Transcribe a float32 16 kHz mono numpy array. Returns the recognized text."""
+    def transcribe(self, audio: np.ndarray, initial_prompt: str | None = None) -> str:
+        """Transcribe a float32 16 kHz mono numpy array. Returns the recognized text.
+
+        Args:
+            audio: Audio data as a 1D float32 numpy array at 16 kHz.
+            initial_prompt: Optional prompt to bias the decoder toward expected
+                vocabulary (proper nouns, technical terms, etc.).
+        """
         if self._model is None:
             raise RuntimeError("Model not loaded — call load_model() first")
 
-        segments, info = self._model.transcribe(
-            audio,
-            vad_filter=True,
-            vad_parameters={"min_silence_duration_ms": 500},
-        )
+        kwargs = {
+            "vad_filter": True,
+            "vad_parameters": {"min_silence_duration_ms": 500},
+        }
+        if initial_prompt:
+            kwargs["initial_prompt"] = initial_prompt
+            log.debug("Using initial_prompt (%d chars)", len(initial_prompt))
+
+        segments, info = self._model.transcribe(audio, **kwargs)
 
         log.info(
             "Detected language: %s (probability %.2f)",

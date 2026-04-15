@@ -25,6 +25,13 @@ DEFAULT_CONFIG = {
         "base_url": "http://localhost:11434",
         "timeout": 10,
     },
+    "brain": {
+        "enabled": True,
+        "db_path": "brain.db",
+        "auto_learn_threshold": 3,
+        "prompt_max_chars": 500,
+        "correction_hotkey": "ctrl+shift+c",
+    },
 }
 
 CONFIG_PATH = Path(__file__).parent / "config.yaml"

@@ -24,7 +24,8 @@ Rules:
 {commands_block}
 3. Preserve the EXACT language the user spoke. Do NOT translate.
 4. Mixed Dutch+English in a single sentence is intentional, not an error.
-5. Output ONLY the corrected text. No explanations, no commentary."""
+5. Output ONLY the corrected text. No explanations, no commentary.
+{vocabulary_block}"""
 
 
 def _build_commands_block() -> str:
@@ -47,10 +48,24 @@ def _build_commands_block() -> str:
     return "\n".join(lines)
 
 
-# Build once at import time — the command set is static.
-_SYSTEM_PROMPT = _SYSTEM_PROMPT_TEMPLATE.format(
-    commands_block=_build_commands_block()
-)
+# Build the commands block once at import time — the command set is static.
+_COMMANDS_BLOCK = _build_commands_block()
+
+
+def _build_system_prompt(vocabulary_text: str = "") -> str:
+    """Build the full system prompt, optionally including vocabulary terms."""
+    if vocabulary_text:
+        vocab_block = (
+            "\n6. The user has these custom vocabulary terms. "
+            "Prefer these exact spellings when the audio is ambiguous:\n"
+            + vocabulary_text
+        )
+    else:
+        vocab_block = ""
+    return _SYSTEM_PROMPT_TEMPLATE.format(
+        commands_block=_COMMANDS_BLOCK,
+        vocabulary_block=vocab_block,
+    )
 
 
 def ollama_health_check(base_url: str) -> bool:
@@ -68,12 +83,14 @@ def _call_ollama(
     model: str,
     base_url: str,
     timeout: int,
+    vocabulary_text: str = "",
 ) -> str | None:
     """Send raw transcription to Ollama /api/chat. Returns cleaned text or None."""
+    system_prompt = _build_system_prompt(vocabulary_text)
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": raw_text},
         ],
         "stream": False,
@@ -103,12 +120,13 @@ def _call_ollama(
         return None
 
 
-def postprocess_text(raw_text: str, pp_config: dict) -> str:
+def postprocess_text(raw_text: str, pp_config: dict, vocabulary_text: str = "") -> str:
     """Post-process transcription via Ollama, falling back to raw text on failure.
 
     Args:
         raw_text: Raw Whisper transcription.
         pp_config: The "postprocessing" sub-dict from the app config.
+        vocabulary_text: Formatted vocabulary list from the brain DB.
     """
     if not pp_config.get("enabled", True):
         return raw_text
@@ -118,6 +136,7 @@ def postprocess_text(raw_text: str, pp_config: dict) -> str:
         model=pp_config["model"],
         base_url=pp_config["base_url"],
         timeout=pp_config["timeout"],
+        vocabulary_text=vocabulary_text,
     )
     if result is None:
         log.info("Post-processing unavailable, returning raw Whisper text")

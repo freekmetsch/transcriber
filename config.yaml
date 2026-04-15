@@ -21,3 +21,11 @@ postprocessing:
   model: qwen2.5:3b        # Ollama model for formatting and cleanup
   base_url: http://localhost:11434
   timeout: 10              # Seconds before falling back to raw text
+
+# Vocabulary Brain — learning system
+brain:
+  enabled: true            # Set to false to disable vocabulary brain
+  db_path: brain.db        # SQLite database path (relative to app dir)
+  auto_learn_threshold: 3  # Corrections needed before auto-adding to vocabulary
+  prompt_max_chars: 500    # Max characters for Whisper initial_prompt
+  correction_hotkey: ctrl+shift+c  # Hotkey to open correction window
