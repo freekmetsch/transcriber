@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.command' | grep -qE '^git (commit|merge)' && (cd \"c:\\Users\\metsc\\Cloned_Repositories\\transcriber\" && git push -u origin HEAD 2>/dev/null || true) || true",
+            "statusMessage": "Auto-pushing to remote...",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}
