@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "vocabulary": [
+    {
+      "id": 3,
+      "term": "Anthropic",
+      "phonetic_hint": "anthropik",
+      "frequency": 0,
+      "source": "manual",
+      "priority": "high",
+      "created_at": "2026-04-15 14:13:40",
+      "updated_at": "2026-04-15 14:13:40"
+    },
+    {
+      "id": 2,
+      "term": "Claude Code",
+      "phonetic_hint": "claud coat",
+      "frequency": 0,
+      "source": "manual",
+      "priority": "high",
+      "created_at": "2026-04-15 14:13:39",
+      "updated_at": "2026-04-15 14:13:39"
+    },
+    {
+      "id": 1,
+      "term": "Freek",
+      "phonetic_hint": "freak",
+      "frequency": 0,
+      "source": "manual",
+      "priority": "high",
+      "created_at": "2026-04-15 14:13:39",
+      "updated_at": "2026-04-15 14:13:39"
+    },
+    {
+      "id": 4,
+      "term": "HeliBoard",
+      "phonetic_hint": "heli board",
+      "frequency": 0,
+      "source": "manual",
+      "priority": "normal",
+      "created_at": "2026-04-15 14:13:40",
+      "updated_at": "2026-04-15 14:13:40"
+    },
+    {
+      "id": 6,
+      "term": "Ollama",
+      "phonetic_hint": "oh lama",
+      "frequency": 0,
+      "source": "manual",
+      "priority": "normal",
+      "created_at": "2026-04-15 14:13:40",
+      "updated_at": "2026-04-15 14:13:40"
+    },
+    {
+      "id": 5,
+      "term": "Syncthing",
+      "phonetic_hint": "sink thing",
+      "frequency": 0,
+      "source": "manual",
+      "priority": "normal",
+      "created_at": "2026-04-15 14:13:40",
+      "updated_at": "2026-04-15 14:13:40"
+    },
+    {
+      "id": 7,
+      "term": "whisper",
+      "phonetic_hint": "wisper",
+      "frequency": 0,
+      "source": "manual",
+      "priority": "normal",
+      "created_at": "2026-04-15 14:13:40",
+      "updated_at": "2026-04-15 14:13:40"
+    }
+  ],
+  "corrections": []
+}
