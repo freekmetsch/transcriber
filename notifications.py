@@ -55,7 +55,7 @@ def notify_ollama_fallback():
     _ollama_warned = True
     _send(
         "Post-processing unavailable",
-        "Ollama not reachable — using raw transcription text",
+        "All Ollama endpoints unreachable — using raw transcription text",
     )
     log.info("Toast: Ollama fallback warning")
 

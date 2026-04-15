@@ -399,10 +399,25 @@ class TranscriberApp:
 
         pp = self.config["postprocessing"]
         if pp["enabled"]:
-            if ollama_health_check(pp["base_url"]):
-                log.info("Ollama reachable at %s (model: %s)", pp["base_url"], pp["model"])
+            primary_ok = ollama_health_check(pp["base_url"])
+            fallback_url = pp.get("fallback_url")
+            fallback_ok = ollama_health_check(fallback_url) if fallback_url else None
+
+            if primary_ok:
+                log.info("Ollama primary: %s \u2713 (model: %s)", pp["base_url"], pp["model"])
             else:
-                log.warning("Ollama not reachable at %s — post-processing will fall back to raw text", pp["base_url"])
+                log.warning("Ollama primary: %s \u2717", pp["base_url"])
+
+            if fallback_url is not None:
+                if fallback_ok:
+                    log.info("Ollama fallback: %s \u2713", fallback_url)
+                else:
+                    log.warning("Ollama fallback: %s \u2717", fallback_url)
+
+            if not primary_ok and (fallback_url is None or not fallback_ok):
+                log.warning("Ollama: no endpoints reachable — post-processing will use raw text")
+            elif not primary_ok and fallback_ok:
+                log.info("Primary unavailable — will use fallback for post-processing")
 
         self._register_hotkey()
 

@@ -23,6 +23,7 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "model": "qwen2.5:3b",
         "base_url": "http://localhost:11434",
+        "fallback_url": None,
         "timeout": 10,
     },
     "brain": {

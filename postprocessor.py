@@ -5,6 +5,7 @@ for mixed Dutch+English transcriptions.
 """
 
 import logging
+import time
 
 import requests
 
@@ -13,7 +14,37 @@ from commands import FORMATTING_COMMANDS
 log = logging.getLogger("transcriber.postprocessor")
 
 _HEALTH_TIMEOUT = 3  # seconds
+_CONNECT_TIMEOUT = 1  # seconds — fast failure detection for LAN/Tailscale
 _session = requests.Session()
+
+# Circuit breaker state for remote (primary) endpoint
+_remote_healthy: bool = True
+_last_remote_failure: float = 0.0
+_CIRCUIT_COOLDOWN: int = 60  # seconds before re-probing a failed remote
+
+
+def _is_remote_available() -> bool:
+    """Return True if remote hasn't failed recently (within cooldown)."""
+    if _remote_healthy:
+        return True
+    return (time.monotonic() - _last_remote_failure) >= _CIRCUIT_COOLDOWN
+
+
+def _mark_remote_failed() -> None:
+    """Mark remote as failed — circuit breaker opens."""
+    global _remote_healthy, _last_remote_failure
+    _remote_healthy = False
+    _last_remote_failure = time.monotonic()
+    log.info("Circuit breaker opened — remote marked unavailable for %ds", _CIRCUIT_COOLDOWN)
+
+
+def _mark_remote_healthy() -> None:
+    """Mark remote as healthy — circuit breaker closes."""
+    global _remote_healthy
+    if not _remote_healthy:
+        log.info("Circuit breaker closed — remote recovered")
+    _remote_healthy = True
+
 
 _SYSTEM_PROMPT_TEMPLATE = """\
 You are a dictation post-processor. The user dictates in mixed Dutch and English.
@@ -102,7 +133,7 @@ def _call_ollama(
     }
     try:
         r = _session.post(
-            f"{base_url}/api/chat", json=payload, timeout=timeout
+            f"{base_url}/api/chat", json=payload, timeout=(_CONNECT_TIMEOUT, timeout)
         )
         r.raise_for_status()
         return r.json().get("message", {}).get("content", "").strip()
@@ -121,7 +152,10 @@ def _call_ollama(
 
 
 def postprocess_text(raw_text: str, pp_config: dict, vocabulary_text: str = "") -> str:
-    """Post-process transcription via Ollama, falling back to raw text on failure.
+    """Post-process transcription via Ollama, with primary→fallback chain.
+
+    Tries the primary endpoint first. If a fallback_url is configured and the
+    primary fails, tries the fallback. Only returns raw text if both fail.
 
     Args:
         raw_text: Raw Whisper transcription.
@@ -131,15 +165,29 @@ def postprocess_text(raw_text: str, pp_config: dict, vocabulary_text: str = "") 
     if not pp_config.get("enabled", True):
         return raw_text
 
-    result = _call_ollama(
-        raw_text,
+    fallback_url = pp_config.get("fallback_url")
+    call_kwargs = dict(
         model=pp_config["model"],
-        base_url=pp_config["base_url"],
         timeout=pp_config["timeout"],
         vocabulary_text=vocabulary_text,
     )
-    if result is None:
-        log.info("Post-processing unavailable, returning raw Whisper text")
-        return raw_text
 
-    return result
+    # Try primary (skip if circuit breaker is open AND fallback exists)
+    if fallback_url is None or _is_remote_available():
+        result = _call_ollama(raw_text, base_url=pp_config["base_url"], **call_kwargs)
+        if result is not None:
+            _mark_remote_healthy()
+            return result
+        if fallback_url is not None:
+            _mark_remote_failed()
+
+    # Try fallback
+    if fallback_url:
+        log.info("Primary Ollama unavailable, using fallback at %s", fallback_url)
+        result = _call_ollama(raw_text, base_url=fallback_url, **call_kwargs)
+        if result is not None:
+            return result
+
+    # Both failed (or no fallback configured)
+    log.warning("All Ollama endpoints failed, returning raw Whisper text")
+    return raw_text

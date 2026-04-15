@@ -96,15 +96,16 @@ The codebase supports `config.local.yaml` — a gitignored file that overrides `
 
 - [ ] **Create `config.local.yaml` on the laptop**
   ```yaml
-  # Laptop overrides — Whisper on CPU, Ollama on desktop via Tailscale
+  # Laptop overrides — GPU Whisper, remote Ollama with local fallback
   whisper:
-    model_size: medium
-    device: cpu
-    compute_type: int8
+    model_size: large-v3
+    device: cuda
+    compute_type: float16
 
   postprocessing:
     base_url: http://100.103.79.95:11434
-    timeout: 15
+    fallback_url: http://localhost:11434
+    timeout: 10
   ```
 
 - [ ] **Verify Ollama connectivity**
@@ -191,13 +192,15 @@ Start with `medium`. Drop to `small` if latency is too high.
 
 - [ ] **Test 6: Desktop offline fallback**
   - Disable Tailscale or turn off desktop
-  - Dictate — should still work with raw Whisper text (no post-processing)
-  - Reconnect — post-processing resumes automatically
+  - Dictate — should still get formatted text via local Ollama fallback (not raw Whisper text)
+  - Check log for "Primary Ollama unavailable, using fallback"
+  - Second dictation should skip remote instantly (circuit breaker)
+  - Reconnect desktop — post-processing auto-recovers to remote within 60s
 
 ### Verification
 - All tests pass
 - Post-processing is visibly happening (formatted output, not raw)
-- Fallback works when desktop is unreachable
+- Local Ollama fallback works when desktop is unreachable
 
 ---
 
@@ -239,7 +242,7 @@ These are prompt-tuning issues, not setup blockers.
 
 **What to do on the laptop** (Phases L1–L4):
 1. `git pull` → create venv → install deps → run tests
-2. Create `config.local.yaml` with CPU whisper + `base_url: http://100.103.79.95:11434`
+2. Create `config.local.yaml` with GPU whisper + `base_url: http://100.103.79.95:11434` + `fallback_url: http://localhost:11434`
 3. `python vocab.py import brain_export.json`
 4. `python app.py` → smoke test
 
