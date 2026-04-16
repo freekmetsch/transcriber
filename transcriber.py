@@ -19,6 +19,8 @@ class Transcriber:
         self.device = device
         self.compute_type = compute_type
         self._model: WhisperModel | None = None
+        self.last_language: str = ""
+        self.last_language_probability: float = 0.0
 
     def load_model(self):
         """Load the Whisper model. Falls back to CPU if CUDA fails."""
@@ -67,6 +69,8 @@ class Transcriber:
 
         segments, info = self._model.transcribe(audio, **kwargs)
 
+        self.last_language = info.language or ""
+        self.last_language_probability = float(info.language_probability or 0.0)
         log.info(
             "Detected language: %s (probability %.2f)",
             info.language,

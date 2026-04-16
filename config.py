@@ -18,6 +18,18 @@ DEFAULT_CONFIG = {
         "model_size": "large-v3",
         "device": "cuda",
         "compute_type": "float16",
+        "cloud": {
+            "enabled": True,
+            "provider": "openrouter",
+            "model": "openai/gpt-audio",
+            "base_url": "https://openrouter.ai/api/v1",
+            "api_key": "",
+            "referer": "https://github.com/freekmetsch/transcriber",
+            "title": "Transcriber",
+            "timeout": 2.0,
+            "failure_threshold": 3,
+            "cooldown_s": 60.0,
+        },
     },
     "postprocessing": {
         "enabled": True,
@@ -47,6 +59,8 @@ DEFAULT_CONFIG = {
         "sounds": True,
         "output_method": "auto",   # auto | type | paste
         "auto_start": False,
+        "show_level_meter": True,
+        "show_language": True,
     },
 }
 
@@ -73,11 +87,17 @@ def load_config() -> dict:
     """
     config = DEFAULT_CONFIG.copy()
 
+    tracked_api_key = ""
     if CONFIG_PATH.exists():
         with open(CONFIG_PATH, encoding="utf-8") as f:
             user_config = yaml.safe_load(f) or {}
         config = _deep_merge(config, user_config)
         log.info("Loaded config from %s", CONFIG_PATH)
+        tracked_api_key = (
+            (user_config.get("whisper") or {})
+            .get("cloud", {})
+            .get("api_key", "")
+        )
     else:
         log.info("No config.yaml found, using defaults")
 
@@ -86,5 +106,11 @@ def load_config() -> dict:
             local_config = yaml.safe_load(f) or {}
         config = _deep_merge(config, local_config)
         log.info("Applied local overrides from %s", LOCAL_CONFIG_PATH)
+
+    if tracked_api_key:
+        log.error(
+            "SECURITY: whisper.cloud.api_key is set in TRACKED config.yaml — "
+            "move it to config.local.yaml (gitignored) to avoid leaking it."
+        )
 
     return config

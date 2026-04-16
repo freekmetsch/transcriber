@@ -20,10 +20,12 @@ class Recorder:
         sample_rate: int = 16000,
         channels: int = 1,
         device: int | str | None = None,
+        on_level=None,
     ):
         self.sample_rate = sample_rate
         self.channels = channels
         self.device = device
+        self.on_level = on_level
         self._buffer: list[np.ndarray] = []
         self._stream: sd.InputStream | None = None
         self._lock = threading.Lock()
@@ -32,6 +34,12 @@ class Recorder:
         if status:
             log.warning("Audio status: %s", status)
         self._buffer.append(indata.copy())
+        if self.on_level is not None:
+            rms = float(np.sqrt(np.mean(indata ** 2)))
+            try:
+                self.on_level(rms)
+            except Exception:
+                log.exception("on_level callback raised")
 
     def start(self):
         """Begin capturing audio from the microphone."""
@@ -89,6 +97,7 @@ class StreamingRecorder:
         silence_duration_ms: int = 600,
         min_segment_ms: int = 500,
         max_segment_s: int = 30,
+        on_level=None,
     ):
         self.sample_rate = sample_rate
         self.channels = channels
@@ -97,6 +106,7 @@ class StreamingRecorder:
         self.silence_duration_ms = silence_duration_ms
         self.min_segment_ms = min_segment_ms
         self.max_segment_s = max_segment_s
+        self.on_level = on_level
 
         self._stream: sd.InputStream | None = None
         self._lock = threading.Lock()
@@ -118,6 +128,12 @@ class StreamingRecorder:
 
         chunk = indata.copy()
         rms = np.sqrt(np.mean(chunk ** 2))
+
+        if self.on_level is not None:
+            try:
+                self.on_level(float(rms))
+            except Exception:
+                log.exception("on_level callback raised")
 
         # Frames needed for silence duration
         silence_frames_threshold = int(

@@ -10,6 +10,7 @@ import ctypes
 import json
 import logging
 import threading
+import time
 import tkinter as tk
 from pathlib import Path
 
@@ -66,8 +67,14 @@ class RecordingIndicator:
         self._text_window: tk.Toplevel | None = None
         self._text_canvas: tk.Canvas | None = None
         self._text_item: int | None = None
+        self._text_badge_item: int | None = None
         self._text_fade_id: str | None = None
         self._text_popup_w: int = 360
+        # Level bar + elapsed timer
+        self._level_bar: int | None = None
+        self._timer_item: int | None = None
+        self._timer_start: float = 0.0
+        self._timer_id: str | None = None
 
     def start(self):
         """Start the Tk thread. Call once during app init."""
@@ -138,7 +145,21 @@ class RecordingIndicator:
             self._canvas.create_line(lx, 16, lx, 32, fill="#555555", width=1.5)
 
         # Microphone icon (center)
-        self._draw_mic(_WIN_W // 2, _WIN_H // 2, _STATE_COLORS["listening"])
+        cx = _WIN_W // 2
+        self._draw_mic(cx, _WIN_H // 2, _STATE_COLORS["listening"])
+
+        # Level bar below mic (hidden until update_level fires)
+        self._level_bar = self._canvas.create_rectangle(
+            cx, 42, cx, 45,
+            fill=_STATE_COLORS["listening"], outline="",
+        )
+
+        # Elapsed timer between mic and menu dots
+        self._timer_item = self._canvas.create_text(
+            145, _WIN_H // 2,
+            text="", fill="#888888",
+            font=("Segoe UI", 9), anchor="center",
+        )
 
         # Menu dots (right zone)
         self._canvas.create_text(
@@ -179,6 +200,11 @@ class RecordingIndicator:
         )
         self._text_canvas.pack()
         self._draw_pill(self._text_canvas, 0, 0, tp_w, tp_h, tp_h // 2, "#2a2a2a")
+        self._text_badge_item = self._text_canvas.create_text(
+            18, tp_h // 2,
+            text="", fill="#2ECC71",
+            font=("Segoe UI", 9, "bold"), anchor="w",
+        )
         self._text_item = self._text_canvas.create_text(
             tp_w // 2, tp_h // 2,
             text="", fill="#cccccc", font=("Segoe UI", 10),
@@ -363,6 +389,8 @@ class RecordingIndicator:
         self._current_state = "listening"
         self._stop_pulse()
         self._recolor_mic(_STATE_COLORS["listening"])
+        self._reset_level_bar()
+        self._start_timer()
         self._root.attributes("-alpha", 0.0)
         self._root.deiconify()
         self._root.lift()
@@ -376,6 +404,8 @@ class RecordingIndicator:
 
     def _do_hide(self):
         self._stop_pulse()
+        self._cancel_timer()
+        self._reset_level_bar()
         if self._text_fade_id is not None:
             self._root.after_cancel(self._text_fade_id)
             self._text_fade_id = None
@@ -397,16 +427,34 @@ class RecordingIndicator:
         if state == "transcribing":
             self._start_pulse()
 
-    def show_text(self, text: str):
-        """Show transcribed text as popup above bar (auto-fades after 3s). Thread-safe."""
-        if self._root:
-            self._root.after(0, lambda: self._do_show_text(text))
+    def show_text(self, text: str, language: str = "", confidence: float = 1.0):
+        """Show transcribed text as popup above bar (auto-fades after 3s). Thread-safe.
 
-    def _do_show_text(self, text: str):
+        If `language` is provided, prepends a small colored badge (EN/NL) with color
+        keyed to `confidence`: green >0.8, yellow 0.5-0.8, orange <0.5.
+        """
+        if self._root:
+            self._root.after(0, lambda: self._do_show_text(text, language, confidence))
+
+    def _do_show_text(self, text: str, language: str = "", confidence: float = 1.0):
         if self._text_fade_id is not None:
             self._root.after_cancel(self._text_fade_id)
         display = text if len(text) <= 60 else text[:57] + "\u2026"
         self._text_canvas.itemconfig(self._text_item, text=display)
+        if language:
+            if confidence > 0.8:
+                badge_color = "#2ECC71"
+            elif confidence > 0.5:
+                badge_color = "#F1C40F"
+            else:
+                badge_color = "#E67E22"
+            self._text_canvas.itemconfig(
+                self._text_badge_item,
+                text=language.upper(),
+                fill=badge_color,
+            )
+        else:
+            self._text_canvas.itemconfig(self._text_badge_item, text="")
         self._position_text_popup()
         self._text_window.deiconify()
         self._text_window.lift()
@@ -416,6 +464,55 @@ class RecordingIndicator:
         self._text_fade_id = None
         if self._text_window:
             self._text_window.withdraw()
+
+    # --- Level bar ---
+
+    def update_level(self, rms: float):
+        """Update the mic level bar. Thread-safe."""
+        if self._root:
+            self._root.after(0, lambda: self._do_update_level(rms))
+
+    def _do_update_level(self, rms: float):
+        if self._level_bar is None or self._canvas is None:
+            return
+        # Normalize: speech typically peaks around 0.05 RMS on 16 kHz mono float32.
+        width = min(max(rms, 0.0) / 0.05, 1.0) * 50.0
+        cx = _WIN_W // 2
+        half = width / 2.0
+        self._canvas.coords(self._level_bar, cx - half, 42, cx + half, 45)
+        color = _STATE_COLORS.get(self._current_state, "#e0e0e0")
+        self._canvas.itemconfig(self._level_bar, fill=color)
+
+    def _reset_level_bar(self):
+        if self._level_bar is None or self._canvas is None:
+            return
+        cx = _WIN_W // 2
+        self._canvas.coords(self._level_bar, cx, 42, cx, 45)
+
+    # --- Elapsed timer ---
+
+    def _start_timer(self):
+        self._cancel_timer()
+        self._timer_start = time.monotonic()
+        self._canvas.itemconfig(self._timer_item, text="0:00")
+        self._timer_id = self._root.after(1000, self._update_timer)
+
+    def _update_timer(self):
+        if self._timer_item is None or self._canvas is None:
+            return
+        elapsed = int(time.monotonic() - self._timer_start)
+        self._canvas.itemconfig(
+            self._timer_item,
+            text=f"{elapsed // 60}:{elapsed % 60:02d}",
+        )
+        self._timer_id = self._root.after(1000, self._update_timer)
+
+    def _cancel_timer(self):
+        if self._timer_id is not None:
+            self._root.after_cancel(self._timer_id)
+            self._timer_id = None
+        if self._timer_item is not None and self._canvas is not None:
+            self._canvas.itemconfig(self._timer_item, text="")
 
     def show_feedback(self, feedback_type: str = "success"):
         """Flash the mic icon briefly to confirm an event. Thread-safe.

@@ -16,6 +16,16 @@ whisper:
   device: cuda             # Options: cuda, cpu
   compute_type: float16    # Options: float16 (GPU), int8 (CPU), float32
 
+  # Cloud dictation via OpenRouter audio-chat: one call does transcription +
+  # formatting + personal vocabulary. Falls back to local Whisper + (streaming:
+  # formatting commands | batch: Ollama) when disabled, offline, or rate-limited.
+  cloud:
+    enabled: true                   # Falls back to local if api_key is empty.
+    provider: openrouter
+    model: openai/gpt-audio         # Alternatives: openai/gpt-4o-audio-preview
+    # api_key: SET IN config.local.yaml — never commit here.
+    timeout: 2.0                    # Read timeout (seconds) before falling back.
+
 # LLM post-processing (Ollama)
 postprocessing:
   enabled: true            # Set to false to skip post-processing
@@ -47,3 +57,5 @@ ui:
   sounds: true               # Play start/stop/error tones
   output_method: auto        # auto | type | paste (type = SendInput, paste = clipboard)
   auto_start: false          # Start with Windows (toggle via tray menu)
+  show_level_meter: true     # Live mic level bar during recording
+  show_language: true        # EN/NL badge on the text popup after each segment

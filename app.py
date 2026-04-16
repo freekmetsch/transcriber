@@ -20,11 +20,13 @@ import focus_guard
 import notifications
 import shortcut
 import sounds
+from cascade_dictator import CascadeDictator
+from cloud_dictator import CloudDictator
 from config import load_config
 from recorder import Recorder, StreamingRecorder
 from transcriber import Transcriber
-from postprocessor import postprocess_text, ollama_health_check
-from output import (output_text, output_text_streaming, output_text_to_target,
+from postprocessor import build_cloud_system_prompt, ollama_health_check
+from output import (output_text_to_target,
                     save_clipboard, restore_clipboard)
 from recording_indicator import RecordingIndicator
 
@@ -68,12 +70,42 @@ class TranscriberApp:
             sample_rate=self.config["audio"]["sample_rate"],
             channels=self.config["audio"]["channels"],
             device=self.config["audio"].get("device"),
+            on_level=self._on_audio_level,
         )
         self.transcriber = Transcriber(
             model_size=self.config["whisper"]["model_size"],
             device=self.config["whisper"]["device"],
             compute_type=self.config["whisper"]["compute_type"],
         )
+
+        cc = self.config["whisper"]["cloud"]
+        cloud = None
+        if cc["enabled"] and cc["api_key"]:
+            cloud = CloudDictator(
+                api_key=cc["api_key"],
+                model=cc["model"],
+                base_url=cc["base_url"],
+                referer=cc["referer"],
+                title=cc["title"],
+                timeout=cc["timeout"],
+                failure_threshold=cc["failure_threshold"],
+                cooldown_s=cc["cooldown_s"],
+            )
+            log.info(
+                "cloud dictation: enabled (provider=%s model=%s)",
+                cc["provider"], cc["model"],
+            )
+        elif cc["enabled"]:
+            log.info("cloud dictation: enabled in config but api_key missing — using local only")
+        else:
+            log.info("cloud dictation: disabled (local only)")
+        self.dictator = CascadeDictator(
+            cloud=cloud,
+            transcriber=self.transcriber,
+            pp_config=self.config["postprocessing"],
+            build_system_prompt=build_cloud_system_prompt,
+        )
+
         self._recording = False
         self._lock = threading.Lock()
         self._icon: pystray.Icon | None = None
@@ -93,6 +125,7 @@ class TranscriberApp:
                 silence_duration_ms=scfg["silence_duration_ms"],
                 min_segment_ms=scfg["min_segment_ms"],
                 max_segment_s=scfg["max_segment_s"],
+                on_level=self._on_audio_level,
             )
             log.info("Streaming mode enabled (threshold=%.3f, silence=%dms)",
                      scfg["silence_threshold"], scfg["silence_duration_ms"])
@@ -316,54 +349,67 @@ class TranscriberApp:
         self._recording_indicator.show()
         self.streaming_recorder.start(on_segment=self._on_speech_segment)
 
+    def _on_audio_level(self, rms: float):
+        """Forward mic RMS to the recording indicator's level bar. Thread-safe."""
+        if self.config["ui"]["show_level_meter"]:
+            self._recording_indicator.update_level(rms)
+
     def _on_speech_segment(self, audio):
         """Called per speech segment from the StreamingRecorder worker thread.
 
-        Hot path: Whisper → formatting commands → output. No LLM in the loop.
+        Hot path: cascade dictation (cloud → local fallback) → output.
+        Cloud path: OpenRouter audio-chat returns already-formatted text.
+        Local path: Whisper + apply_formatting_commands.
         """
         self._recording_indicator.set_state("transcribing")
         t_start = time.monotonic()
 
-        # Transcribe with context from previous segment
-        prompt = self._segment_context or self._initial_prompt or None
         try:
-            t_whisper = time.monotonic()
-            text = self.transcriber.transcribe(audio, initial_prompt=prompt)
-            text = text.strip()
-            t_whisper = time.monotonic() - t_whisper
+            t_dictate = time.monotonic()
+            result = self.dictator.dictate(
+                audio,
+                mode="streaming",
+                vocabulary_text=self._vocabulary_text,
+                previous_segment=self._segment_context,
+                initial_prompt=self._segment_context or self._initial_prompt or None,
+            )
+            result = result.strip()
+            t_dictate = time.monotonic() - t_dictate
         except Exception:
-            log.exception("Segment transcription failed")
+            log.exception("Segment dictation failed")
             sounds.play_error()
             self._recording_indicator.set_state("listening")
             return
 
-        if not text:
+        if not result:
             self._recording_indicator.set_state("listening")
             return
 
-        log.info("Segment raw: %s", text)
-
-        # Apply formatting commands directly (instant, no LLM round-trip)
-        from commands import apply_formatting_commands
-        result = apply_formatting_commands(text)
         t_total = time.monotonic() - t_start
-        log.info("Segment timing: whisper=%.2fs, total=%.2fs", t_whisper, t_total)
+        log.info(
+            "Segment timing: dictate=%.2fs (%s), total=%.2fs",
+            t_dictate, self.dictator.last_path, t_total,
+        )
 
-        # Add space between consecutive segments
         if self._segment_context:
             result = " " + result
 
-        # Output into target window (refocus if user switched away)
         output_method = self.config["ui"]["output_method"]
         output_text_to_target(result, self._target_hwnd,
                               method=output_method, streaming=True)
 
-        # Update state for next segment
         self._segment_context = result.strip()
         self._last_transcription = result.strip()
         self._last_action_status = f"Dictated: {result.strip()[:40]}"
         self._recording_indicator.set_state("listening")
-        self._recording_indicator.show_text(result.strip())
+        if self.config["ui"]["show_language"]:
+            self._recording_indicator.show_text(
+                result.strip(),
+                language=self.dictator.last_language,
+                confidence=self.dictator.last_language_probability,
+            )
+        else:
+            self._recording_indicator.show_text(result.strip())
         self._recording_indicator.show_feedback("success")
         log.info("Segment output: %s", result.strip())
 
@@ -392,51 +438,43 @@ class TranscriberApp:
             self._recording_indicator.hide()
             return
         try:
+            self._recording_indicator.set_state("processing")
             t_start = time.monotonic()
-            t_whisper = time.monotonic()
-            text = self.transcriber.transcribe(
+            t_dictate = time.monotonic()
+            result = self.dictator.dictate(
                 audio,
+                mode="batch",
+                vocabulary_text=self._vocabulary_text,
+                previous_segment="",
                 initial_prompt=self._initial_prompt or None,
             )
-            text = text.strip()
-            t_whisper = time.monotonic() - t_whisper
-            if text:
-                log.info("Raw transcription: %s", text)
-                self._recording_indicator.set_state("processing")
-                t_ollama = time.monotonic()
-                result = postprocess_text(
-                    text,
-                    self.config["postprocessing"],
-                    vocabulary_text=self._vocabulary_text,
+            result = result.strip()
+            t_dictate = time.monotonic() - t_dictate
+            t_total = time.monotonic() - t_start
+            if result:
+                log.info(
+                    "Batch timing: dictate=%.2fs (%s), total=%.2fs",
+                    t_dictate, self.dictator.last_path, t_total,
                 )
-                t_ollama = time.monotonic() - t_ollama
-                t_total = time.monotonic() - t_start
-                log.info("Batch timing: whisper=%.2fs, ollama=%.2fs, total=%.2fs", t_whisper, t_ollama, t_total)
-                # Check if postprocessing fell back to raw text
-                if result == text and self.config["postprocessing"]["enabled"]:
-                    notifications.notify_ollama_fallback()
-
                 log.info("Output: %s", result)
                 self._last_transcription = result
                 self._last_action_status = f"Dictated: {result[:40]}"
                 output_method = self.config["ui"]["output_method"]
                 output_text_to_target(result, self._target_hwnd, method=output_method)
 
-                # Green flash confirmation, then hide
                 self._recording_indicator.show_feedback("success")
                 time.sleep(0.4)
                 self._recording_indicator.hide()
 
-                # Auto-show correction window if configured
                 self._show_correction_auto(result)
             else:
-                log.warning("Transcription returned empty text")
+                log.warning("Dictation returned empty text")
                 sounds.play_error()
                 self._recording_indicator.hide()
         except Exception:
-            log.exception("Transcription failed")
+            log.exception("Dictation failed")
             sounds.play_error()
-            notifications.notify_error("Transcription failed", "Check microphone and try again")
+            notifications.notify_error("Dictation failed", "Check microphone and try again")
             self._recording_indicator.hide()
 
     def _register_hotkey(self):

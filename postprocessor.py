@@ -96,6 +96,50 @@ def _build_system_prompt(vocabulary_text: str = "") -> str:
     )
 
 
+_CLOUD_PROMPT_TEMPLATE = """\
+You are a dictation post-processor. The user dictates in English.
+
+Rules:
+1. Transcribe the user's audio accurately.
+2. Add correct punctuation and capitalization.
+3. Convert formatting commands to symbols:
+{commands_block}
+4. Output ONLY the corrected text. No explanations, no commentary.\
+{vocabulary_block}{context_block}"""
+
+
+def build_cloud_system_prompt(
+    vocabulary_text: str = "",
+    previous_segment: str = "",
+    mode: str = "streaming",
+) -> str:
+    """Build the system prompt sent to the OpenRouter audio-chat model.
+
+    Combines: transcription directive + formatting-command rules + personal
+    vocabulary + (streaming only) the previous segment's text as context.
+    """
+    if vocabulary_text:
+        vocab_block = (
+            "\n5. The user has these custom vocabulary terms. "
+            "Prefer these exact spellings when the audio is ambiguous:\n"
+            + vocabulary_text
+        )
+    else:
+        vocab_block = ""
+    if mode == "streaming" and previous_segment:
+        context_block = (
+            f"\n\nPrevious segment (for context, do NOT repeat in output): "
+            f"\"{previous_segment}\""
+        )
+    else:
+        context_block = ""
+    return _CLOUD_PROMPT_TEMPLATE.format(
+        commands_block=_COMMANDS_BLOCK,
+        vocabulary_block=vocab_block,
+        context_block=context_block,
+    )
+
+
 def ollama_health_check(base_url: str) -> bool:
     """Return True if the Ollama server is reachable."""
     try:
