@@ -11,8 +11,10 @@ venv/
 *.bin
 *.pt
 
-# SQLite (future: vocabulary brain)
+# SQLite (vocabulary brain)
 *.db
+*.db-shm
+*.db-wal
 
 # Local config override (machine-specific settings)
 config.local.yaml

@@ -43,14 +43,13 @@ AI-first software engineer. Optimize for model reasoning, regeneration, and debu
 | `notifications.py` | Windows toast notifications (winotify wrapper, graceful fallback) |
 | `recording_indicator.py` | Win+H-style floating "Listening..." overlay during recording |
 | `vocab_ui.py` | Vocabulary manager Toplevel window (tray-accessible) |
-
-## Future Files (not yet created)
-| File | Purpose | Phase |
-|------|---------|-------|
-| `brain.py` | SQLite vocabulary database, CRUD operations | Phase 3 |
-| `learning.py` | Correction tracking, auto-learning logic | Phase 3 |
-| `prompt_builder.py` | Generate initial_prompt from vocabulary | Phase 3 |
-| `correction_ui.py` | Correction window (tkinter) | Phase 3 |
+| `brain.py` | SQLite vocabulary database, CRUD operations (WAL, thread-safe) |
+| `learning.py` | Correction tracking, auto-learning logic |
+| `prompt_builder.py` | Generate Whisper initial_prompt from vocabulary |
+| `correction_ui.py` | Floating correction window (tkinter, dark theme) |
+| `sounds.py` | Audio feedback tones (start/stop/error, generated in-memory) |
+| `autostart.py` | Windows auto-start via Registry Run key |
+| `vocab.py` | CLI tool for vocabulary management |
 
 ## Documentation
 - `docs/feature-lists/` — active feature lists and execution plans.
@@ -146,7 +145,7 @@ Exceptions:
 This project runs on Windows, where `open()` defaults to cp1252 encoding. **Always use `python -m py_compile <file>` for syntax checks** — never `ast.parse(open(...).read())` or similar. `py_compile` handles encoding correctly; raw `open()` without `encoding='utf-8'` will crash on UTF-8 files. If you must read a Python file programmatically, always pass `encoding='utf-8'`.
 
 ### Test policy
-No automated test suite yet. Verification uses `py_compile` syntax checks (free, fast) and manual smoke tests. Future: pytest suite for vocabulary DB operations (Phase 3+).
+Verification uses `py_compile` syntax checks (free, fast) and manual smoke tests. pytest suite exists for vocabulary DB (`test_brain.py`), prompt builder (`test_prompt_builder.py`), learning (`test_learning.py`), and postprocessor (`test_postprocessor.py`).
 
 ## Skills
 Project skills in `.claude/skills/` — MUST be consulted when working in that area:

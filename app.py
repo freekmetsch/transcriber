@@ -4,6 +4,7 @@ Entry point: system tray icon, global hotkey, recording/transcription pipeline.
 """
 
 import logging
+import os
 import sys
 import threading
 import time
@@ -13,11 +14,14 @@ import keyboard
 import pystray
 from PIL import Image, ImageDraw
 
+import autostart
+import sounds
 from config import load_config
-from recorder import Recorder
+from recorder import Recorder, StreamingRecorder
 from transcriber import Transcriber
 from postprocessor import postprocess_text, ollama_health_check
-from output import paste_text
+from output import (output_text, output_text_streaming,
+                    save_clipboard, restore_clipboard)
 from recording_indicator import RecordingIndicator
 
 logging.basicConfig(
@@ -61,6 +65,26 @@ class TranscriberApp:
         self._icon: pystray.Icon | None = None
         self._last_toggle_time: float = 0.0
 
+        # Streaming recorder (created if streaming enabled)
+        self._streaming_enabled = self.config["streaming"]["enabled"]
+        if self._streaming_enabled:
+            scfg = self.config["streaming"]
+            self.streaming_recorder = StreamingRecorder(
+                sample_rate=self.config["audio"]["sample_rate"],
+                channels=self.config["audio"]["channels"],
+                device=self.config["audio"].get("device"),
+                silence_threshold=scfg["silence_threshold"],
+                silence_duration_ms=scfg["silence_duration_ms"],
+                min_segment_ms=scfg["min_segment_ms"],
+                max_segment_s=scfg["max_segment_s"],
+            )
+            log.info("Streaming mode enabled (threshold=%.3f, silence=%dms)",
+                     scfg["silence_threshold"], scfg["silence_duration_ms"])
+
+        # Streaming session state
+        self._segment_context: str = ""
+        self._clipboard_original: str | None = None
+
         # Brain (vocabulary database) — initialized if enabled
         self._brain = None
         self._correction_ui = None
@@ -70,8 +94,11 @@ class TranscriberApp:
         self._last_transcription: str = ""
 
         # Recording indicator (Win+H-style overlay)
-        self._recording_indicator = RecordingIndicator()
+        self._recording_indicator = RecordingIndicator(on_stop=self._toggle_recording)
         self._recording_indicator.start()
+
+        # Sound feedback
+        sounds.set_enabled(self.config["ui"]["sounds"])
 
         # Notifications
         self._notifications_enabled = False
@@ -89,15 +116,14 @@ class TranscriberApp:
         db_path = Path(__file__).parent / brain_cfg["db_path"]
         self._brain = VocabularyBrain(db_path)
 
-        # Build initial prompt for Whisper conditioning
+        # Build initial prompt for Whisper conditioning (use cache if available)
         self._initial_prompt = get_or_build_prompt(
             self._brain, max_chars=brain_cfg["prompt_max_chars"]
         )
+        self._vocabulary_text = get_vocabulary_for_llm(self._brain)
+
         if self._initial_prompt:
             log.info("Whisper initial_prompt: %s", self._initial_prompt[:80] + "..." if len(self._initial_prompt) > 80 else self._initial_prompt)
-
-        # Build vocabulary text for LLM post-processing
-        self._vocabulary_text = get_vocabulary_for_llm(self._brain)
         if self._vocabulary_text:
             log.info("Loaded %d vocabulary terms for post-processing", self._vocabulary_text.count("\n") + 1)
 
@@ -128,12 +154,22 @@ class TranscriberApp:
             else:
                 log.info("Toast notifications unavailable (winotify not installed)")
 
+    def _rebuild_prompts(self):
+        """Rebuild Whisper initial_prompt and LLM vocabulary after brain mutations."""
+        from prompt_builder import get_or_build_prompt, get_vocabulary_for_llm
+
+        brain_cfg = self.config["brain"]
+        self._initial_prompt = get_or_build_prompt(
+            self._brain, max_chars=brain_cfg["prompt_max_chars"], force_rebuild=True
+        )
+        self._vocabulary_text = get_vocabulary_for_llm(self._brain)
+        self._refresh_tray_menu()
+
     def _on_correction(self, original: str, corrected: str):
         """Callback from correction UI — log correction and check auto-learning."""
         if self._brain is None:
             return
         from learning import process_correction
-        from prompt_builder import get_or_build_prompt, get_vocabulary_for_llm
 
         brain_cfg = self.config["brain"]
         learned = process_correction(
@@ -151,21 +187,12 @@ class TranscriberApp:
                         entry["term"], entry["phonetic_hint"],
                         brain_cfg["auto_learn_threshold"],
                     )
-            # Rebuild prompts since vocabulary changed
-            self._initial_prompt = get_or_build_prompt(
-                self._brain,
-                max_chars=brain_cfg["prompt_max_chars"],
-                force_rebuild=True,
-            )
-            self._vocabulary_text = get_vocabulary_for_llm(self._brain)
-            self._refresh_tray_menu()
+            self._rebuild_prompts()
 
     def _on_vocab_add(self, term: str, hint: str | None, priority: str):
         """Callback from correction UI quick-add panel."""
         if self._brain is None:
             return
-        from prompt_builder import get_or_build_prompt, get_vocabulary_for_llm
-
         self._brain.add_term(term, phonetic_hint=hint, priority=priority)
         log.info("Quick-added vocab: %s (hint=%s, priority=%s)", term, hint, priority)
 
@@ -173,26 +200,13 @@ class TranscriberApp:
             import notifications
             notifications.notify_vocab_added(term)
 
-        # Rebuild prompts
-        brain_cfg = self.config["brain"]
-        self._initial_prompt = get_or_build_prompt(
-            self._brain, max_chars=brain_cfg["prompt_max_chars"], force_rebuild=True
-        )
-        self._vocabulary_text = get_vocabulary_for_llm(self._brain)
-        self._refresh_tray_menu()
+        self._rebuild_prompts()
 
     def _on_vocab_change(self):
         """Callback from vocabulary manager — rebuild prompts and refresh tray."""
         if self._brain is None:
             return
-        from prompt_builder import get_or_build_prompt, get_vocabulary_for_llm
-
-        brain_cfg = self.config["brain"]
-        self._initial_prompt = get_or_build_prompt(
-            self._brain, max_chars=brain_cfg["prompt_max_chars"], force_rebuild=True
-        )
-        self._vocabulary_text = get_vocabulary_for_llm(self._brain)
-        self._refresh_tray_menu()
+        self._rebuild_prompts()
         log.info("Vocabulary changed — prompts rebuilt, tray refreshed")
 
     def _open_correction_window(self):
@@ -226,10 +240,11 @@ class TranscriberApp:
             )
 
     def _tray_tooltip(self) -> str:
-        """Build tray icon tooltip with vocabulary count."""
+        """Build tray icon tooltip with hotkey hint and vocabulary count."""
+        hotkey = self.config["hotkey"].replace("+", "+").title()
         if self._brain is not None:
-            return f"Transcriber — {self._brain.term_count()} terms"
-        return "Transcriber"
+            return f"Transcriber — {hotkey} to dictate ({self._brain.term_count()} terms)"
+        return f"Transcriber — {hotkey} to dictate"
 
     def _toggle_recording(self):
         # Debounce: keyboard library fires repeatedly while keys are held
@@ -241,21 +256,104 @@ class TranscriberApp:
         with self._lock:
             if self._recording:
                 self._recording = False
+                sounds.play_stop()
                 log.info("Recording stopped (toggle)")
                 self._update_icon(False)
-                self._recording_indicator.hide()
-                threading.Thread(target=self._stop_and_transcribe, daemon=True).start()
+                if self._streaming_enabled:
+                    threading.Thread(target=self._stop_streaming, daemon=True).start()
+                else:
+                    self._recording_indicator.hide()
+                    threading.Thread(target=self._stop_and_transcribe, daemon=True).start()
             else:
                 self._recording = True
+                sounds.play_start()
                 log.info("Recording started (toggle)")
                 self._update_icon(True)
-                self._recording_indicator.show()
-                self.recorder.start()
+                if self._streaming_enabled:
+                    self._start_streaming()
+                else:
+                    self._recording_indicator.show()
+                    self.recorder.start()
+
+    # --- Streaming pipeline ---
+
+    def _start_streaming(self):
+        """Begin streaming recording with VAD."""
+        self._segment_context = ""
+        method = self.config["ui"]["output_method"]
+        if method == "paste":
+            self._clipboard_original = save_clipboard()
+        else:
+            self._clipboard_original = None
+        self._recording_indicator.show()
+        self.streaming_recorder.start(on_segment=self._on_speech_segment)
+
+    def _on_speech_segment(self, audio):
+        """Called per speech segment from the StreamingRecorder worker thread."""
+        self._recording_indicator.set_state("transcribing")
+
+        # Transcribe with context from previous segment
+        prompt = self._segment_context or self._initial_prompt or None
+        try:
+            text = self.transcriber.transcribe(audio, initial_prompt=prompt)
+            text = text.strip()
+        except Exception:
+            log.exception("Segment transcription failed")
+            sounds.play_error()
+            self._recording_indicator.set_state("listening")
+            return
+
+        if not text:
+            self._recording_indicator.set_state("listening")
+            return
+
+        log.info("Segment raw: %s", text)
+
+        # Post-process via Ollama
+        self._recording_indicator.set_state("processing")
+        result = postprocess_text(
+            text,
+            self.config["postprocessing"],
+            vocabulary_text=self._vocabulary_text,
+        )
+
+        # Add space between consecutive segments
+        if self._segment_context:
+            result = " " + result
+
+        # Output into active window
+        output_method = self.config["ui"]["output_method"]
+        output_text_streaming(result, method=output_method)
+
+        # Update state for next segment
+        self._segment_context = result.strip()
+        self._last_transcription = result.strip()
+        self._recording_indicator.show_text(result.strip())
+        self._recording_indicator.set_state("listening")
+        log.info("Segment output: %s", result.strip())
+
+    def _stop_streaming(self):
+        """Stop streaming, flush remaining audio, restore clipboard."""
+        remaining = self.streaming_recorder.stop()
+
+        if remaining is not None and len(remaining) > 0:
+            self._on_speech_segment(remaining)
+
+        self._recording_indicator.hide()
+        if self._clipboard_original is not None:
+            restore_clipboard(self._clipboard_original)
+            self._clipboard_original = None
+            log.info("Streaming session ended, clipboard restored")
+        else:
+            log.info("Streaming session ended")
+
+    # --- Batch pipeline ---
 
     def _stop_and_transcribe(self):
         audio = self.recorder.stop()
         if audio is None or len(audio) == 0:
             log.warning("No audio captured")
+            sounds.play_error()
             return
         try:
             text = self.transcriber.transcribe(
@@ -278,14 +376,17 @@ class TranscriberApp:
 
                 log.info("Output: %s", result)
                 self._last_transcription = result
-                paste_text(result)
+                output_method = self.config["ui"]["output_method"]
+                output_text(result, method=output_method)
 
                 # Auto-show correction window if configured
                 self._show_correction_auto(result)
             else:
                 log.warning("Transcription returned empty text")
+                sounds.play_error()
         except Exception:
             log.exception("Transcription failed")
+            sounds.play_error()
 
     def _register_hotkey(self):
         hotkey = self.config["hotkey"]
@@ -313,8 +414,6 @@ class TranscriberApp:
         """Import vocabulary from JSON file."""
         if self._brain is None:
             return
-        from prompt_builder import get_or_build_prompt, get_vocabulary_for_llm
-
         import_path = Path(__file__).parent / "brain_export.json"
         if not import_path.exists():
             log.warning("No brain_export.json found at %s", import_path)
@@ -325,18 +424,12 @@ class TranscriberApp:
         count_after = self._brain.term_count()
         imported = count_after - count_before
 
-        # Rebuild prompts
-        brain_cfg = self.config["brain"]
-        self._initial_prompt = get_or_build_prompt(
-            self._brain, max_chars=brain_cfg["prompt_max_chars"], force_rebuild=True
-        )
-        self._vocabulary_text = get_vocabulary_for_llm(self._brain)
+        self._rebuild_prompts()
 
         if self._notifications_enabled and imported > 0:
             import notifications
             notifications.notify_vocab_imported(imported, "brain_export.json")
 
-        self._refresh_tray_menu()
         log.info("Vocabulary imported and prompts rebuilt")
 
     def _build_tray_menu(self) -> pystray.Menu:
@@ -372,7 +465,15 @@ class TranscriberApp:
                 pystray.Menu.SEPARATOR,
             ])
 
-        menu_items.append(pystray.MenuItem("Quit", self._quit))
+        menu_items.extend([
+            pystray.MenuItem(
+                lambda item: "Start with Windows  \u2713" if autostart.is_enabled()
+                             else "Start with Windows",
+                lambda icon, item: autostart.toggle(),
+            ),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Quit", self._quit),
+        ])
         return pystray.Menu(*menu_items)
 
     def _refresh_tray_menu(self):
@@ -451,6 +552,7 @@ class TranscriberApp:
 
 
 def main():
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))
     try:
         app = TranscriberApp()
         app.run()

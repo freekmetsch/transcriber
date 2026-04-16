@@ -23,6 +23,14 @@ postprocessing:
   base_url: http://localhost:11434
   timeout: 10              # Seconds before falling back to raw text
 
+# Streaming mode — VAD-chunked phrase-by-phrase dictation
+streaming:
+  enabled: true              # false = batch mode (record all, transcribe at end)
+  silence_threshold: 0.01    # RMS energy threshold for speech detection
+  silence_duration_ms: 600   # Silence gap (ms) before segment boundary
+  min_segment_ms: 500        # Ignore segments shorter than this (coughs, clicks)
+  max_segment_s: 30          # Force-cut very long segments
+
 # Vocabulary Brain — learning system
 brain:
   enabled: true            # Set to false to disable vocabulary brain
@@ -30,6 +38,12 @@ brain:
   auto_learn_threshold: 3  # Corrections needed before auto-adding to vocabulary
   prompt_max_chars: 500    # Max characters for Whisper initial_prompt
   correction_hotkey: ctrl+shift+c  # Hotkey to open correction window
-  correction_mode: auto            # auto | hotkey | off
+  correction_mode: hotkey           # auto | hotkey | off
   correction_timeout: 8            # Seconds before auto-hiding (0 = no auto-hide)
   notifications: true              # Windows toast notifications for brain events
+
+# UI polish settings
+ui:
+  sounds: true               # Play start/stop/error tones
+  output_method: auto        # auto | type | paste (type = SendInput, paste = clipboard)
+  auto_start: false          # Start with Windows (toggle via tray menu)

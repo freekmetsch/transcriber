@@ -36,6 +36,18 @@ DEFAULT_CONFIG = {
         "correction_timeout": 8,
         "notifications": True,
     },
+    "streaming": {
+        "enabled": True,
+        "silence_threshold": 0.01,
+        "silence_duration_ms": 600,
+        "min_segment_ms": 500,
+        "max_segment_s": 30,
+    },
+    "ui": {
+        "sounds": True,
+        "output_method": "auto",   # auto | type | paste
+        "auto_start": False,
+    },
 }
 
 CONFIG_PATH = Path(__file__).parent / "config.yaml"

@@ -1,363 +1,823 @@
-# Feature List: Phase 3.5 — UX Polish for Vocabulary Brain
+# Feature List: UX Polish — Professional Feel for Daily-Driver Dictation
 
 Date: 2026-04-15
-Status: Complete
-Scope: Desktop UX improvements to make the vocabulary brain usable day-to-day
+Status: Planned
+Scope: Audio feedback, clipboard-free typing, auto-start, overlay polish, tray polish
 Owner: Freek
 
 ---
 
 ## Problem Framing
 
-Phase 3 built the vocabulary brain — SQLite database, Whisper prompt conditioning, correction tracking, auto-learning. All the machinery works (59/59 tests passing). But the **user interface to that machinery** has three problems:
+The streaming pipeline works. The transcription quality is good. But the *feel* is still a developer prototype:
 
-1. **Invisible correction flow**: The correction window only appears when the user presses Ctrl+Shift+C. If they forget (they will), no corrections get logged, no auto-learning happens, and the brain stays empty forever. The brain's value proposition depends on corrections flowing in.
+1. **Silent state transitions** — pressing the hotkey gives zero audio feedback. User must look at the overlay to confirm recording started. In a workflow where you're looking at the document you're dictating into, this breaks flow.
+2. **Clipboard pollution** — every paste clobbers the clipboard. Even with session-level save/restore, there's a timing window where Ctrl+V gives unexpected text. Streaming mode makes this worse (many rapid pastes).
+3. **Manual startup** — user must open a terminal and run `python app.py` every time. A daily-driver app should start with Windows.
+4. **Static overlay** — hard cuts on show/hide. No interactivity. No elapsed time. Feels like a debug panel, not a product.
+5. **Correction popup interrupts streaming** — the auto-popup was designed for batch mode. In streaming mode it fires per-segment, which is disruptive.
+6. **Tray tooltip is useless** — shows "Transcriber" with no hint of how to use it. Every new session the user must remember the hotkey.
 
-2. **No feedback**: Auto-learning events, Ollama failures, vocabulary changes — all go to terminal logs. The user has no idea the brain is working unless they watch the console. This makes the whole system feel broken even when it's working.
+**Root cause**: The pipeline is solid but the interaction layer hasn't been polished. These are all small touches that compound into a professional feel.
 
-3. **Vocabulary management requires a terminal**: `python vocab.py add "Freek" --hint "freak" --priority high` is fine for development, but not for daily use. The user should be able to manage vocabulary from the tray icon — the thing that's always visible.
-
-**Core insight**: The brain is only as good as the corrections that feed it. The single most important UX change is making corrections effortless and automatic.
+**Goal**: Make every interaction feel responsive, automatic, and polished. Zero new features — just make what exists feel great.
 
 ---
 
 ## Scope
 
 ### In Scope
-- Auto-show correction window after each transcription (configurable mode)
-- "Add to vocabulary" button in correction window for immediate term addition
-- Windows toast notifications for key events (auto-learned, errors)
-- Vocabulary manager window accessible from system tray menu
-- Dynamic tray menu updates (live vocabulary count)
-- Non-aggressive focus behavior (don't steal keystrokes from target app)
+- Embedded start/stop/error sounds (WAV, async playback)
+- SendInput clipboard-free text insertion for streaming mode
+- Auto-start on Windows login (Registry Run key, tray toggle)
+- Overlay polish: fade transitions, elapsed timer, hover-reveal stop button, smooth pulse
+- WS_EX_NOACTIVATE on overlay so clicks don't steal focus
+- Disable correction auto-popup in streaming (change default to hotkey mode)
+- Tray tooltip with hotkey hint and recording duration
 
 ### Out of Scope
-- Full settings GUI (config.yaml is fine for settings)
-- Redesign of system tray icon or menu structure
-- New keyboard shortcuts beyond existing ones
-- Web-based or Electron-based UI
-- Cross-platform UI (Windows-only is fine)
+- Settings UI (future phase)
+- Session history panel (future phase)
+- Mic input level meter (future phase)
+- Light theme / appearance customization (future phase)
+- First-run wizard (future phase)
+- App-aware dictation profiles (future phase)
 
 ---
 
-## Chosen Approach: Auto-Show Correction + Toast Notifications + Tray Vocab Manager
+## Chosen Approach
 
-### Why This Approach
+### Audio feedback: Embedded WAV with winsound
 
-1. **Auto-show correction window** is the highest-impact change. The brain can't learn if corrections don't flow in. Making the correction window appear automatically (with a tasteful UX) removes the biggest friction point.
+Generate sine-wave tones programmatically at import time using `struct` + `wave` + `io.BytesIO`. Store as `bytes` constants. Play via `winsound.PlaySound(data, SND_MEMORY | SND_ASYNC)`.
 
-2. **Toast notifications via `winotify`** are the lightest way to give feedback. Native Windows 10/11 notifications — no custom UI needed, no focus stealing, just a brief popup in the notification area. Zero new visual design work.
+- **Start tone**: ascending two-note — 880 Hz then 1100 Hz, 80ms each, sine wave with 5ms fade-in/out to prevent clicks
+- **Stop tone**: descending — 1100 Hz then 880 Hz, 80ms each
+- **Error tone**: low single note — 330 Hz, 200ms
 
-3. **Vocabulary manager as a Tkinter Toplevel** reuses the existing Tk thread from the correction window. No new dependency, no second mainloop, no thread conflicts. Simple list+buttons UI is all that's needed.
+Total embedded size: ~15 KB in memory. Generated at import time, played from memory, no disk I/O, no temp files. `SND_ASYNC` returns immediately — zero latency impact on the hotkey.
 
-4. **Everything is optional/configurable**: correction mode (always/hotkey/never), notifications (on/off). The system stays functional with all UX features disabled — just less discoverable.
+**Why this over alternatives**:
+- `winsound.Beep()` sounds robotic and blocks the calling thread
+- External WAV files add deployment complexity
+- In-memory bytes via `io.BytesIO` + `wave` module is self-contained and clean
+
+### Text insertion: keyboard.write() with modifier release
+
+The `keyboard` library (already a dependency) has `keyboard.write(text)` which internally uses `SendInput` + `KEYEVENTF_UNICODE`. This types text character-by-character without touching the clipboard.
+
+**Hybrid approach**:
+- **Streaming segments** (<200 chars): use `keyboard.write()` — fast for short text, no clipboard disruption
+- **Batch mode** (any length): keep existing clipboard paste — faster for long text
+- **Configurable**: `ui.output_method: auto | type | paste` (default: `auto`)
+
+Before typing, release any held modifier keys via `GetAsyncKeyState` + `SendInput` key-up events. This prevents Ctrl/Shift from the hotkey interfering with typed characters.
+
+**Why keyboard.write() over rolling our own ctypes**:
+- Already a dependency (zero new imports)
+- Handles UTF-16 surrogate pairs for all Unicode including Dutch characters
+- Battle-tested across Windows versions
+- We add the modifier-release wrapper (~15 lines of ctypes)
+
+### Auto-start: Registry Run key
+
+`winreg` (stdlib) to write `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Transcriber`. Value: `"path\to\pythonw.exe" "path\to\app.py"`.
+
+**Why this over alternatives**:
+| Alternative | Why Rejected |
+|---|---|
+| **Startup folder shortcut** | Requires pywin32 or PowerShell subprocess to create .lnk files. More complex for no benefit. |
+| **Task Scheduler** | Overkill. Entry hidden from Task Manager > Startup. Less discoverable for the user. |
+
+Registry key appears in Task Manager > Startup and Settings > Apps > Startup. User can disable it from Windows UI without touching the app. `winreg` is stdlib — zero new dependencies.
+
+### Overlay polish: Fade + timer + hover-stop + smooth pulse
+
+Five micro-improvements:
+
+1. **Fade transitions**: Animate `-alpha` from 0 to 0.9 on show (5 steps over 120ms) and reverse on hide. Uses `_root.after()` chain. Prevents the jarring hard-cut.
+
+2. **Elapsed timer**: Show "0:42" right-aligned in the overlay, updating every second via `_root.after(1000, ...)`. Helps user gauge dictation length and confirms the app is still alive.
+
+3. **Hover-reveal stop button**: When mouse enters the overlay, a subtle "Stop" label fades in on the right side. When mouse leaves, it fades out. Clicking it stops recording. Clean and discoverable without cluttering the default view.
+
+4. **WS_EX_NOACTIVATE**: Set via `ctypes.windll.user32.SetWindowLongW()` after window creation. Prevents the overlay from stealing focus when clicked, so the active text field keeps focus.
+
+5. **Smoother pulse**: Instead of binary on/off toggle every 500ms, graduate the dot color through 8 intensity steps over 1.6s for a breathing effect.
 
 ### Rejected Alternatives
 
 | Alternative | Why Rejected |
 |---|---|
-| **Keep correction on hotkey only, add only toast notifications** | Doesn't solve the core problem — if the user forgets Ctrl+Shift+C, no corrections flow in. The brain stays empty. Toast notifications alone can't fix an invisible feature. |
-| **Full standalone settings/manager Tkinter app** | Over-engineered for a tray-resident utility. Would need its own window management, wouldn't feel integrated. The tray menu is the natural home for vocabulary management. |
-| **Electron or web-based UI** | Massive dependency for a simple list window. Would increase app startup time and memory usage for no real benefit over Tkinter. |
-| **Auto-show AND auto-focus correction window** | Dangerous — steals keystrokes from the target app. If the user dictates "Hello world" and immediately starts typing more, the correction window eats those keystrokes. Auto-show without auto-focus is the safe middle ground. |
+| **ctypes SendInput wrapper (custom 50-line implementation)** | Reinvents what `keyboard.write()` already does. No benefit since keyboard is already imported. |
+| **Overlay rounded corners via canvas shape** | Tk on Windows doesn't support window-level rounded corners cleanly. Adds complexity for minimal visual gain on Windows 10/11. |
+| **Startup folder .lnk shortcut** | Requires PowerShell subprocess or pywin32 COM to create .lnk. Registry is simpler, equally visible to user, zero dependencies. |
+| **Remove correction UI entirely** | Premature. Changing correction_mode to "hotkey" disables auto-popup but keeps manual access for occasional use. Full removal is a separate decision. |
+
+---
+
+## Harden Audit Findings
+
+| # | Finding | Severity | Mitigation in Plan |
+|---|---------|----------|--------------------|
+| 1 | **Modifier key interference with SendInput**: If Ctrl/Shift still logically held when keyboard.write() fires, characters get interpreted as shortcuts (e.g., Ctrl+S instead of "s") | High | `_release_modifiers()` function using `GetAsyncKeyState` check + explicit key-up `SendInput` events before every `keyboard.write()` call. 50ms sleep after release for OS to process. |
+| 2 | **keyboard.write() thread safety**: Rapid calls from the StreamingRecorder worker thread could interleave with hotkey events on the keyboard listener thread | Medium | Keep `_paste_lock` serialization around `type_text()`. Same lock used for clipboard paste — mutual exclusion guaranteed. |
+| 3 | **WS_EX_NOACTIVATE + click binding**: Tk's `<Button-1>` may not fire on a non-activating window on some Windows versions | Medium | Test on target machine. If click handler doesn't fire, hover-reveal still works visually and user always has the hotkey. Stop button is convenience, not the only path. |
+| 4 | **winsound SND_ASYNC on short-lived threads**: Sound playback cuts off if calling thread exits before playback completes | Low | Sounds are triggered from the hotkey callback which runs on the keyboard listener thread (daemon, long-lived). Not a practical issue. |
+| 5 | **Registry auto-start path breaks if app directory moves**: Absolute path in registry becomes invalid | Low | On startup, if auto-start is enabled, verify the registered path matches current location. Log warning if mismatched. Re-enable from tray menu fixes it. |
+| 6 | **Overlay alpha animation on slow machines**: 5 animation frames in 120ms could stutter if Tk event loop is busy during transcription | Low | Graceful degradation: if overlay is being hidden while a fade-in is still running, cancel the in-progress animation and jump to target state. |
 
 ---
 
 ## Phase Plan
 
-### Phase 3.5: UX Polish
-**Goal**: Make the vocabulary brain feel responsive and effortless to use.
-**Context strategy**: single-window
-**Risk tier**: R1 (localized UI changes, existing backend unchanged)
-**Estimated effort**: S-M (~1 session)
+### Phase P1: UX Polish (single phase, single /run context)
+**Goal**: Every interaction feels responsive and automatic.
+**Risk tier**: R2 (cross-cutting, multiple files)
+**Estimated effort**: L (6 tickets, 2 new files, 4 modified files)
+**Context strategy**: Single /run window, sequential tickets
 
 ---
 
-#### 3.5A: Auto-Show Correction Window
+## Phase P1 — Execution Tickets
 
-**What changes:**
-- After each transcription completes and text is pasted, the correction window auto-shows with the transcribed text.
-- Window appears near the system tray (bottom-right) as a non-modal popup.
-- **Does NOT steal focus** — the target app keeps focus. User can ignore the correction window and it auto-hides after a configurable timeout (default: 8 seconds). Or they can click it to edit.
-- If user clicks the window or presses the correction hotkey, the window gains focus and the auto-hide timer stops.
-- Enter saves correction + hides. Escape dismisses without saving. Auto-hide after timeout also dismisses without saving.
+### P1-1: Sound module with embedded WAV tones
 
-**New config option:**
-```yaml
-brain:
-  correction_mode: auto    # auto | hotkey | off
-  correction_timeout: 8    # seconds before auto-hiding (0 = no auto-hide)
+**File**: New file `sounds.py`
+**Action**: Create module that generates and plays start/stop/error tones
+**Risk tier**: R1
+
+**Design**:
+```python
+"""Audio feedback tones for recording state transitions.
+
+Tones are generated as sine waves at import time and stored in memory.
+Playback is async (non-blocking) via winsound.
+"""
+
+import io
+import logging
+import math
+import struct
+import wave
+import winsound
+
+log = logging.getLogger("transcriber.sounds")
+
+def _generate_tone(frequency: float, duration_ms: int, volume: float = 0.3,
+                   sample_rate: int = 16000, fade_ms: int = 5) -> bytes:
+    """Generate a sine wave tone as WAV bytes in memory.
+
+    Args:
+        frequency: Tone frequency in Hz.
+        duration_ms: Duration in milliseconds.
+        volume: Amplitude 0.0-1.0.
+        sample_rate: Sample rate in Hz.
+        fade_ms: Linear fade-in/out to prevent click artifacts.
+    """
+    n_samples = int(sample_rate * duration_ms / 1000)
+    fade_samples = int(sample_rate * fade_ms / 1000)
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)  # 16-bit
+        wf.setframerate(sample_rate)
+        for i in range(n_samples):
+            # Sine wave
+            sample = math.sin(2 * math.pi * frequency * i / sample_rate)
+            # Apply volume
+            sample *= volume
+            # Fade in/out
+            if i < fade_samples:
+                sample *= i / fade_samples
+            elif i > n_samples - fade_samples:
+                sample *= (n_samples - i) / fade_samples
+            # Pack as 16-bit signed integer
+            wf.writeframes(struct.pack("<h", int(sample * 32767)))
+    return buf.getvalue()
+
+
+def _generate_two_tone(freq1: float, freq2: float,
+                       duration_ms: int = 80, **kwargs) -> bytes:
+    """Generate two consecutive tones as a single WAV."""
+    # Generate individual PCM data (skip WAV headers)
+    # Then combine into one WAV
+    sample_rate = kwargs.get("sample_rate", 16000)
+    n_per_tone = int(sample_rate * duration_ms / 1000)
+    fade_ms = kwargs.get("fade_ms", 5)
+    fade_samples = int(sample_rate * fade_ms / 1000)
+    volume = kwargs.get("volume", 0.3)
+
+    frames = bytearray()
+    for freq in (freq1, freq2):
+        for i in range(n_per_tone):
+            sample = math.sin(2 * math.pi * freq * i / sample_rate)
+            sample *= volume
+            if i < fade_samples:
+                sample *= i / fade_samples
+            elif i > n_per_tone - fade_samples:
+                sample *= (n_per_tone - i) / fade_samples
+            frames.extend(struct.pack("<h", int(sample * 32767)))
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(bytes(frames))
+    return buf.getvalue()
+
+
+# Pre-generate tones at import time
+_SOUND_START = _generate_two_tone(880, 1100)      # Ascending — recording on
+_SOUND_STOP = _generate_two_tone(1100, 880)       # Descending — recording off
+_SOUND_ERROR = _generate_tone(330, 200, volume=0.2)  # Low buzz — error
+
+_enabled = True
+
+
+def set_enabled(enabled: bool):
+    """Enable or disable all sound playback."""
+    global _enabled
+    _enabled = enabled
+
+
+def play_start():
+    """Play start-recording tone. Non-blocking."""
+    if _enabled:
+        try:
+            winsound.PlaySound(_SOUND_START,
+                               winsound.SND_MEMORY | winsound.SND_ASYNC)
+        except Exception:
+            log.debug("Could not play start sound")
+
+
+def play_stop():
+    """Play stop-recording tone. Non-blocking."""
+    if _enabled:
+        try:
+            winsound.PlaySound(_SOUND_STOP,
+                               winsound.SND_MEMORY | winsound.SND_ASYNC)
+        except Exception:
+            log.debug("Could not play stop sound")
+
+
+def play_error():
+    """Play error tone. Non-blocking."""
+    if _enabled:
+        try:
+            winsound.PlaySound(_SOUND_ERROR,
+                               winsound.SND_MEMORY | winsound.SND_ASYNC)
+        except Exception:
+            log.debug("Could not play error sound")
 ```
 
-**Files modified:**
-- `correction_ui.py` — Add auto-hide timer, no-focus show mode, position near tray
-- `app.py` — Call `show()` after paste based on `correction_mode` setting
-- `config.py` — Add `correction_mode` and `correction_timeout` defaults
-- `config.yaml` — Add new settings
-
-**Why non-aggressive focus:**
-The dictation workflow is: hold hotkey → speak → release → text pastes into Notepad/browser/etc. The user's cursor is in their target app. If the correction window steals focus, the very next keystrokes go to the correction window instead of their document. This would be maddening. Instead: show the window, let the user glance at it, and only focus it if they click or press the correction hotkey.
+**Verification**: `python -m py_compile sounds.py` then `python -c "import sounds; sounds.play_start(); import time; time.sleep(0.5)"`
 
 ---
 
-#### 3.5B: Quick-Add Vocabulary from Correction Window
+### P1-2: SendInput text insertion in output.py
 
-**What changes:**
-- Correction window gets an "Add to vocab" button (or Ctrl+Shift+A shortcut while window is focused).
-- When clicked: opens a small inline panel at the bottom of the correction window with fields for: term (pre-filled with the corrected text), phonetic hint (pre-filled with the original text), priority (normal/high toggle).
-- One-click add — term immediately appears in vocabulary, prompts rebuild.
-- This lets users teach the brain without waiting for the 3-correction auto-learn threshold.
+**File**: `output.py`
+**Action**: Add `type_text()` and `output_text_streaming()` with modifier key release
+**Risk tier**: R2
 
-**Files modified:**
-- `correction_ui.py` — Add "Add to vocab" button and inline panel
-- `app.py` — Wire vocab-add callback to brain
+**New functions added to output.py**:
+```python
+import ctypes
+import keyboard as kb
 
----
+# Windows virtual key codes for modifier keys
+_VK_SHIFT = 0x10
+_VK_CONTROL = 0x11
+_VK_MENU = 0x12     # Alt
+_VK_LWIN = 0x5B
+_VK_RWIN = 0x5C
+_VK_MODIFIERS = (_VK_SHIFT, _VK_CONTROL, _VK_MENU, _VK_LWIN, _VK_RWIN)
 
-#### 3.5C: Windows Toast Notifications
+_INPUT_KEYBOARD = 1
+_KEYEVENTF_KEYUP = 0x0002
 
-**What changes:**
-- Add `winotify` as an optional dependency for native Windows 10/11 toast notifications.
-- Notifications for:
-  - **Auto-learned term**: "Brain learned: Freek (was: Freak) — after 3 corrections"
-  - **Ollama fallback**: "Post-processing unavailable — using raw text" (once per session, not every transcription)
-  - **Vocabulary imported**: "Imported 12 terms from brain_export.json"
-- Notifications are silent (no sound) and brief (5 seconds).
-- If `winotify` is not installed, notifications are silently skipped (log-only fallback).
-- Configurable on/off.
+# ctypes structures for SendInput (modifier release only)
+class _KEYBDINPUT(ctypes.Structure):
+    _fields_ = [("wVk", ctypes.c_ushort), ("wScan", ctypes.c_ushort),
+                ("dwFlags", ctypes.c_ulong), ("time", ctypes.c_ulong),
+                ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))]
 
-**New config option:**
-```yaml
-brain:
-  notifications: true    # Windows toast notifications for brain events
+class _INPUT_UNION(ctypes.Union):
+    _fields_ = [("ki", _KEYBDINPUT)]
+
+class _INPUT(ctypes.Structure):
+    _fields_ = [("type", ctypes.c_ulong), ("union", _INPUT_UNION)]
+
+_SendInput = ctypes.windll.user32.SendInput
+_GetAsyncKeyState = ctypes.windll.user32.GetAsyncKeyState
+
+
+def _release_modifiers():
+    """Release any held modifier keys to prevent interference with typed text."""
+    for vk in _VK_MODIFIERS:
+        if _GetAsyncKeyState(vk) & 0x8000:
+            inp = _INPUT(type=_INPUT_KEYBOARD,
+                         union=_INPUT_UNION(ki=_KEYBDINPUT(
+                             wVk=vk, wScan=0, dwFlags=_KEYEVENTF_KEYUP,
+                             time=0, dwExtraInfo=None)))
+            _SendInput(1, ctypes.byref(inp), ctypes.sizeof(_INPUT))
+
+
+def type_text(text: str):
+    """Type text into the active window via SendInput (keyboard.write).
+
+    No clipboard involvement. Thread-safe (uses _paste_lock).
+    Releases modifier keys before typing to prevent Ctrl/Shift interference.
+    """
+    with _paste_lock:
+        _release_modifiers()
+        time.sleep(0.05)
+        kb.write(text, delay=0)
+
+
+# Characters above this threshold use clipboard paste (faster for bulk)
+_TYPE_THRESHOLD = 200
+
+
+def output_text_streaming(text: str, method: str = "auto"):
+    """Output text using the configured method.
+
+    Args:
+        text: Text to output into the active window.
+        method: "auto" = type for short text, paste for long text.
+                "type" = always use SendInput (keyboard.write).
+                "paste" = always use clipboard paste.
+    """
+    if method == "type" or (method == "auto" and len(text) <= _TYPE_THRESHOLD):
+        try:
+            type_text(text)
+        except Exception:
+            log.warning("type_text failed, falling back to clipboard paste")
+            paste_text_streaming(text)
+    else:
+        paste_text_streaming(text)
 ```
 
-**New file:**
-- `notifications.py` — Thin wrapper around `winotify` with graceful fallback
+**Import change at top of output.py**: add `import ctypes` and `import keyboard as kb`.
 
-**Files modified:**
-- `app.py` — Send notifications on auto-learn, Ollama fallback, import
-- `config.py` — Add `notifications` default
-- `config.yaml` — Add setting
-- `requirements.txt` — Add `winotify>=1.1.0` (optional, app works without it)
+**Existing functions unchanged**: `paste_text()`, `paste_text_streaming()`, `save_clipboard()`, `restore_clipboard()` remain for backward compat and batch mode.
+
+**Verification**: `python -m py_compile output.py`
 
 ---
 
-#### 3.5D: Vocabulary Manager Window
+### P1-3: Auto-start on login
 
-**What changes:**
-- New Tkinter `Toplevel` window (runs on the same Tk thread as correction window) accessible from the tray menu: "Manage vocabulary..."
-- Shows a scrollable list of all vocabulary terms with columns: Term, Hint, Priority, Frequency, Source.
-- Buttons: Add, Remove, Edit Priority, Export JSON, Import JSON.
-- Add opens a small dialog with fields: term, phonetic hint, priority.
-- Remove deletes the selected term after confirmation.
-- Edit Priority toggles between normal/high.
-- Export/Import use a native Windows file dialog (`tkinter.filedialog`) instead of hardcoded paths.
-- Rebuilds Whisper prompt and LLM vocabulary text after any change.
-- Dark theme matching the correction window.
+**File**: New file `autostart.py`
+**Action**: Registry-based auto-start with enable/disable/toggle/is_enabled
+**Risk tier**: R1
 
-**Files modified:**
-- New file: `vocab_ui.py` — Vocabulary manager Toplevel window
-- `correction_ui.py` — Refactor Tk thread management so it can host multiple Toplevel windows
-- `app.py` — Add "Manage vocabulary..." to tray menu, wire callbacks
+**Design**:
+```python
+"""Windows auto-start via Registry Run key.
+
+Adds/removes an entry in HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run
+that launches the transcriber on login using pythonw.exe (windowless).
+"""
+
+import logging
+import os
+import sys
+import winreg
+
+log = logging.getLogger("transcriber.autostart")
+
+_APP_NAME = "Transcriber"
+_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+
+def _get_launch_command() -> str:
+    """Build the command string for auto-start using absolute paths."""
+    python = sys.executable
+    # Prefer pythonw.exe for windowless launch
+    if python.endswith("python.exe"):
+        pythonw = python.replace("python.exe", "pythonw.exe")
+        if os.path.exists(pythonw):
+            python = pythonw
+    script = os.path.abspath(os.path.join(os.path.dirname(__file__), "app.py"))
+    return f'"{python}" "{script}"'
+
+
+def is_enabled() -> bool:
+    """Check if auto-start is currently registered."""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _REG_PATH) as key:
+            winreg.QueryValueEx(key, _APP_NAME)
+            return True
+    except FileNotFoundError:
+        return False
+
+
+def enable():
+    """Register auto-start in the Windows registry."""
+    cmd = _get_launch_command()
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _REG_PATH,
+                        0, winreg.KEY_SET_VALUE) as key:
+        winreg.SetValueEx(key, _APP_NAME, 0, winreg.REG_SZ, cmd)
+    log.info("Auto-start enabled: %s", cmd)
+
+
+def disable():
+    """Remove auto-start from the Windows registry."""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _REG_PATH,
+                            0, winreg.KEY_SET_VALUE) as key:
+            winreg.DeleteValue(key, _APP_NAME)
+        log.info("Auto-start disabled")
+    except FileNotFoundError:
+        log.debug("Auto-start was not enabled")
+
+
+def toggle() -> bool:
+    """Toggle auto-start. Returns the new state (True = enabled)."""
+    if is_enabled():
+        disable()
+        return False
+    else:
+        enable()
+        return True
+```
+
+**Also in app.py `main()`**: Add `os.chdir(os.path.dirname(os.path.abspath(__file__)))` so paths resolve correctly when launched from registry (working dir would otherwise be `C:\Windows\System32`).
+
+**Verification**: `python -m py_compile autostart.py` then `python -c "import autostart; print(autostart.is_enabled())"`
 
 ---
 
-#### 3.5E: Dynamic Tray Menu
+### P1-4: Overlay polish — fade, timer, hover-stop, smooth pulse
 
-**What changes:**
-- Tray menu vocabulary count updates after each change (correction, auto-learn, manual add/remove).
-- Current behavior: count is set once at startup and never changes.
-- Approach: rebuild the tray menu on vocabulary change events using `pystray`'s `update_menu()` or by toggling menu item visibility.
+**File**: `recording_indicator.py`
+**Action**: Rewrite with fade transitions, elapsed timer, hover-reveal stop button, WS_EX_NOACTIVATE, smooth pulse
+**Risk tier**: R2
 
-**Files modified:**
-- `app.py` — Add method to refresh tray menu, call it after brain mutations
+**New `__init__` signature**:
+```python
+def __init__(self, on_stop=None):
+    self._on_stop = on_stop  # Callback for click-to-stop
+```
 
-**Note**: `pystray` doesn't natively support dynamic menu updates on all backends. If the Windows backend doesn't support it, we fall back to showing the count in the tray icon tooltip instead (which does update dynamically).
+**1. WS_EX_NOACTIVATE** (called once after window creation in `_run_tk`):
+```python
+def _set_no_activate(self):
+    """Prevent overlay from stealing focus when clicked."""
+    try:
+        hwnd = ctypes.windll.user32.GetParent(self._root.winfo_id())
+        GWL_EXSTYLE = -20
+        WS_EX_NOACTIVATE = 0x08000000
+        style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE,
+                                            style | WS_EX_NOACTIVATE)
+    except Exception:
+        log.debug("Could not set WS_EX_NOACTIVATE")
+```
+
+**2. Fade-in on show** (5 steps: 0.0 -> 0.2 -> 0.4 -> 0.6 -> 0.8 -> 0.9, 24ms per step = 120ms total):
+```python
+def _fade_in_step(self, step):
+    alphas = (0.0, 0.2, 0.4, 0.6, 0.8, 0.9)
+    if step < len(alphas):
+        self._root.attributes("-alpha", alphas[step])
+        self._root.after(24, lambda: self._fade_in_step(step + 1))
+
+def _do_show(self):
+    self._current_state = "listening"
+    self._apply_state()
+    self._canvas.itemconfig(self._result_text, text="")
+    self._start_timer()
+    self._root.attributes("-alpha", 0.0)
+    self._root.deiconify()
+    self._root.lift()
+    self._fade_in_step(0)
+```
+
+**3. Fade-out on hide** (reverse, then withdraw):
+```python
+def _fade_out_step(self, step):
+    alphas = (0.9, 0.7, 0.5, 0.3, 0.1, 0.0)
+    if step < len(alphas):
+        self._root.attributes("-alpha", alphas[step])
+        if step < len(alphas) - 1:
+            self._root.after(24, lambda: self._fade_out_step(step + 1))
+        else:
+            self._root.withdraw()
+            self._root.attributes("-alpha", 0.9)  # Reset for next show
+```
+
+**4. Elapsed timer** (right-aligned canvas text, updates every 1s):
+```python
+# In _run_tk, add timer text item:
+self._timer_text = self._canvas.create_text(
+    win_w - 12, cy_top,
+    text="", fill="#666666", font=("Segoe UI", 9),
+    anchor="e",
+)
+
+# Timer methods:
+def _start_timer(self):
+    self._timer_start = time.monotonic()
+    self._timer_id = self._root.after(1000, self._update_timer)
+
+def _update_timer(self):
+    elapsed = int(time.monotonic() - self._timer_start)
+    minutes, seconds = divmod(elapsed, 60)
+    self._canvas.itemconfig(self._timer_text, text=f"{minutes}:{seconds:02d}")
+    self._timer_id = self._root.after(1000, self._update_timer)
+
+def _cancel_timer(self):
+    if self._timer_id is not None:
+        self._root.after_cancel(self._timer_id)
+        self._timer_id = None
+    self._canvas.itemconfig(self._timer_text, text="")
+```
+
+**5. Hover-reveal stop button** (right side of overlay):
+```python
+# In _run_tk, add stop button elements (initially invisible):
+self._stop_bg = self._canvas.create_rectangle(
+    win_w - 64, 4, win_w - 4, win_h - 4,
+    fill="#1e1e1e", outline="",  # Same as background — invisible
+)
+self._stop_label = self._canvas.create_text(
+    win_w - 34, win_h // 2,
+    text="Stop", fill="#1e1e1e",  # Same as background — invisible
+    font=("Segoe UI", 9),
+)
+
+# Hover bindings:
+self._canvas.bind("<Enter>", lambda e: self._on_hover_enter())
+self._canvas.bind("<Leave>", lambda e: self._on_hover_leave())
+self._canvas.tag_bind(self._stop_bg, "<Button-1>", lambda e: self._on_stop_click())
+self._canvas.tag_bind(self._stop_label, "<Button-1>", lambda e: self._on_stop_click())
+
+def _on_hover_enter(self):
+    self._canvas.itemconfig(self._stop_bg, fill="#333333")
+    self._canvas.itemconfig(self._stop_label, fill="#e0e0e0")
+
+def _on_hover_leave(self):
+    self._canvas.itemconfig(self._stop_bg, fill="#1e1e1e")
+    self._canvas.itemconfig(self._stop_label, fill="#1e1e1e")
+
+def _on_stop_click(self):
+    if self._on_stop:
+        self._on_stop()
+```
+
+**6. Smoother pulse** (8-step graduated color cycle, 200ms per step = 1.6s full cycle):
+```python
+_PULSE_STEPS_RED = [
+    "#E74C3C", "#D9443A", "#C83D35", "#993025",
+    "#993025", "#C83D35", "#D9443A", "#E74C3C",
+]
+
+def _pulse(self):
+    if self._canvas is None or not self._pulse_active:
+        return
+    color = _PULSE_STEPS_RED[self._pulse_step % len(_PULSE_STEPS_RED)]
+    self._canvas.itemconfig(self._dot, fill=color)
+    self._pulse_step += 1
+    self._pulse_id = self._root.after(200, self._pulse)
+```
+
+**New instance variables**: `_on_stop`, `_timer_text`, `_timer_id`, `_timer_start`, `_stop_bg`, `_stop_label`, `_pulse_step`
+
+**Verification**: `python -m py_compile recording_indicator.py` + visual inspection
+
+---
+
+### P1-5: Config, tray polish, wire everything into app.py
+
+**Files**: `config.py`, `config.yaml`, `app.py`
+**Action**: Add UI config section, wire sounds + type_text + auto-start into app, polish tray
+**Risk tier**: R2
+
+**config.py — add `ui` section to DEFAULT_CONFIG**:
+```python
+"ui": {
+    "sounds": True,
+    "output_method": "auto",   # auto | type | paste
+    "auto_start": False,
+},
+```
+
+**config.yaml — add `ui` section**:
+```yaml
+# UI polish settings
+ui:
+  sounds: true               # Play start/stop/error tones
+  output_method: auto        # auto | type | paste (type = SendInput, paste = clipboard)
+  auto_start: false          # Start with Windows (toggle via tray menu)
+```
+
+**config.yaml — change brain.correction_mode**:
+```yaml
+brain:
+  correction_mode: hotkey    # Was: auto. Overlay provides feedback in streaming mode.
+```
+
+**app.py changes**:
+
+1. **New imports**:
+```python
+import os
+import sounds
+import autostart
+from output import (paste_text, output_text_streaming,
+                    save_clipboard, restore_clipboard)
+```
+
+2. **Init sounds in `__init__`**:
+```python
+sounds.set_enabled(self.config["ui"]["sounds"])
+```
+
+3. **Pass on_stop callback to RecordingIndicator**:
+```python
+self._recording_indicator = RecordingIndicator(on_stop=self._toggle_recording)
+```
+
+4. **Play sounds in `_toggle_recording`**:
+```python
+def _toggle_recording(self):
+    ...
+    with self._lock:
+        if self._recording:
+            self._recording = False
+            sounds.play_stop()
+            ...
+        else:
+            self._recording = True
+            sounds.play_start()
+            ...
+```
+
+5. **Replace `paste_text_streaming` with `output_text_streaming` in `_on_speech_segment`**:
+```python
+# Was: paste_text_streaming(result)
+output_method = self.config["ui"]["output_method"]
+output_text_streaming(result, method=output_method)
+```
+
+6. **Play error sound on transcription failure**:
+```python
+except Exception:
+    log.exception("Segment transcription failed")
+    sounds.play_error()
+    self._recording_indicator.set_state("listening")
+    return
+```
+
+7. **Tray tooltip with hotkey hint**:
+```python
+def _tray_tooltip(self) -> str:
+    hotkey = self.config["hotkey"].replace("+", "+").title()
+    if self._brain is not None:
+        return f"Transcriber — {hotkey} to dictate ({self._brain.term_count()} terms)"
+    return f"Transcriber — {hotkey} to dictate"
+```
+
+8. **Auto-start tray menu toggle**:
+```python
+# In _build_tray_menu, add before Quit:
+pystray.MenuItem(
+    lambda item: "Start with Windows  \u2713" if autostart.is_enabled()
+                 else "Start with Windows",
+    lambda icon, item: autostart.toggle(),
+),
+pystray.Menu.SEPARATOR,
+```
+
+9. **Working directory fix in `main()`**:
+```python
+def main():
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))
+    ...
+```
+
+10. **Streaming clipboard management update**: With `output_method: auto/type`, streaming mode no longer needs session-level clipboard save/restore for short segments. Update `_start_streaming` and `_stop_streaming` to only save/restore clipboard when method is `paste`:
+```python
+def _start_streaming(self):
+    self._segment_context = ""
+    method = self.config["ui"]["output_method"]
+    if method == "paste":
+        self._clipboard_original = save_clipboard()
+    else:
+        self._clipboard_original = None
+    ...
+
+def _stop_streaming(self):
+    ...
+    if self._clipboard_original is not None:
+        restore_clipboard(self._clipboard_original)
+    ...
+```
+
+**Verification**: `python -m py_compile app.py config.py`
+
+---
+
+### P1-6: Integration compile check and smoke test
+
+**Action**: Compile all modified/new files, run existing tests, manual verification
+**Risk tier**: R1
+
+**Compile check**:
+```bash
+python -m py_compile sounds.py
+python -m py_compile autostart.py
+python -m py_compile output.py
+python -m py_compile recording_indicator.py
+python -m py_compile config.py
+python -m py_compile app.py
+python -m pytest tests/ -v
+```
+
+**Manual test plan**:
+1. Start app (`python app.py`) — verify no errors, tray icon appears
+2. Check tray tooltip shows "Transcriber — Ctrl+Shift+Space to dictate (N terms)"
+3. Press Ctrl+Shift+Space — **ascending tone plays**, overlay fades in smoothly with "Listening... 0:00"
+4. Watch timer increment: 0:01, 0:02, 0:03...
+5. Speak a phrase, pause — text appears in active window via SendInput
+6. Verify clipboard unchanged: paste Ctrl+V — should be whatever was copied before recording
+7. Hover over overlay — "Stop" button fades in on right side
+8. Move mouse away — "Stop" button fades out
+9. Click "Stop" button — **descending tone plays**, overlay fades out smoothly
+10. Right-click tray — "Start with Windows" visible, click it
+11. Verify: `reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v Transcriber`
+12. Click "Start with Windows" again — toggle off, verify registry entry removed
+13. Test error: unplug mic, press hotkey — **error tone plays**
+14. Verify correction auto-popup does NOT appear after transcription (mode changed to hotkey)
+15. Verify Ctrl+Shift+C still opens correction window manually
 
 ---
 
 ## Failure Modes and Mitigations
 
-| # | Failure Mode | Trigger | Impact | Mitigation | Residual Risk |
-|---|---|---|---|---|---|
-| 1 | Auto-show steals focus from target app | User types immediately after dictation ends | Keystrokes go to correction window instead of their document | Show without focus (`root.focus_force()` removed). Only focus on click or correction hotkey. | Edge case: some Windows apps may still lose focus when a new window appears. Test with Notepad, browser, VS Code. |
-| 2 | Two Toplevel windows conflict | Correction window and vocab manager both visible | Tk event loop stalls or crashes | Both are `Toplevel` on the same `Tk()` root, sharing one mainloop. Tested pattern — works reliably. | If vocab manager is open during rapid corrections, UI may feel sluggish. Acceptable. |
-| 3 | `winotify` not installed | User doesn't install optional dependency | No toast notifications shown | Import wrapped in try/except. If missing, all notification calls become no-ops. Log once at startup. | User misses auto-learn feedback. Terminal log still has the info. |
-| 4 | Correction window annoying | User doesn't want to see it after every dictation | User disables brain entirely out of frustration | `correction_mode: hotkey` disables auto-show. `correction_mode: off` hides it completely. Default `auto` with 8s timeout is a mild nudge, not aggressive. | Some users will set it to `hotkey` and forget it exists. That's their choice. |
-| 5 | Auto-hide races with user click | User clicks correction window just as timeout fires | Window hides mid-edit | Cancel auto-hide timer on any user interaction (click, keypress). Re-arm only if user hasn't touched the window. | Sub-second race still possible. Timer cancel on `<FocusIn>` event handles this. |
-| 6 | Tray menu can't dynamically update | `pystray` Windows backend limitation | Vocabulary count stays stale | Fall back to updating tray icon tooltip text (always works). Tooltip shows "Transcriber — 12 terms". | Minor visual inconsistency. Non-blocking. |
-| 7 | File dialog blocks Tk thread | `tkinter.filedialog` is modal | Correction window can't receive events during file dialog | File dialog is inherently modal — this is expected. Correction auto-hide timer should pause while dialog is open. | Non-issue in practice — file dialogs are brief. |
+| # | Failure Mode | Trigger | Impact | Mitigation |
+|---|---|---|---|---|
+| 1 | keyboard.write() types wrong characters | Modifier keys held during typing | Shortcuts triggered instead of text | `_release_modifiers()` before every write call. 50ms delay for OS processing. Falls back to clipboard paste on exception. |
+| 2 | keyboard.write() drops characters | Target app can't keep up with rapid input injection | Missing characters in output | Default delay=0 works for all tested apps. If reports arise, add configurable `ui.type_delay_ms`. |
+| 3 | Sound plays but recording doesn't start | winsound.PlaySound succeeds but InputStream fails | Confusing — user heard the tone but nothing records | Sound plays first, then stream opens. If stream fails, play error sound. Both in same try/except block. |
+| 4 | WS_EX_NOACTIVATE fails | Older Windows or Tk incompatibility | Click on overlay steals focus | Wrapped in try/except. Overlay still works as read-only display. Stop button is convenience, hotkey is primary. |
+| 5 | Registry path stale after venv recreation | User recreates virtualenv at different path | Auto-start launches wrong Python | Log warning on startup if registered path doesn't match. Tray menu re-enable fixes it. |
+| 6 | Fade animation stutters under load | Tk event loop busy during heavy transcription | Choppy show/hide | Cancel in-progress animation on conflicting action (e.g., hide during fade-in). Jump to final state. |
+| 7 | keyboard.write() blocked by target app | Anti-cheat, DRM, or elevated app blocks injected input | Text doesn't appear | `output_text_streaming()` catches exception and falls back to clipboard paste. Logs warning. |
 
 ---
 
 ## Risk Tier and Verification Matrix
 
-| Sub-phase | Risk Tier | Verification |
-|---|---|---|
-| 3.5A: Auto-show correction | R1 | Manual test: dictate → window appears → doesn't steal focus. Test timeout auto-hide. Test click-to-focus. Test all 3 modes (auto/hotkey/off). |
-| 3.5B: Quick-add vocab | R1 | Manual test: correct text → click "Add to vocab" → term appears in `python vocab.py list`. Verify prompt rebuilds. |
-| 3.5C: Toast notifications | R1 | Manual test: trigger auto-learn → toast appears. Test without `winotify` installed → no crash. |
-| 3.5D: Vocabulary manager | R1 | Manual test: open from tray → add/remove/edit terms. Export/import via file dialog. Verify brain DB updated. |
-| 3.5E: Dynamic tray menu | R1 | Manual test: add term → tray menu count updates (or tooltip updates). |
-
----
-
-## Files Summary
-
-**New files (2):**
-```
-transcriber/
-├── notifications.py    # Toast notification wrapper (winotify, graceful fallback)
-└── vocab_ui.py         # Vocabulary manager Toplevel window
-```
-
-**Modified files (5):**
-```
-transcriber/
-├── correction_ui.py    # Auto-show/hide, no-focus mode, quick-add panel, position near tray
-├── app.py              # Wire auto-show, notifications, vocab manager, dynamic tray
-├── config.py           # New defaults: correction_mode, correction_timeout, notifications
-├── config.yaml         # New settings section
-└── requirements.txt    # Add winotify>=1.1.0 (optional)
-```
-
-**Unchanged (8):**
-```
-brain.py, learning.py, prompt_builder.py, postprocessor.py,
-transcriber.py, recorder.py, output.py, commands.py, vocab.py
-```
-
----
-
-## User Guide: Testing Phase 3 Today
-
-### What you can test right now (on this laptop, no GPU needed)
-
-**1. Vocabulary CLI tool:**
-```bash
-cd C:\Users\metsc\Cloned_Repositories\transcriber
-python -m venv venv && venv\Scripts\activate
-pip install pyyaml
-
-# Add your name and commonly misrecognized terms
-python vocab.py add "Freek" --hint "freak" --priority high
-python vocab.py add "Claude Code" --hint "claud coat"
-python vocab.py add "Anthropic" --hint "anthropik"
-python vocab.py add "HeliBoard" --hint "heli board"
-
-# See what's in the brain
-python vocab.py list
-python vocab.py stats
-
-# Export for backup / sync to phone later
-python vocab.py export brain_export.json
-
-# Test import round-trip
-python vocab.py import brain_export.json
-```
-
-**2. Run the test suite:**
-```bash
-pip install pytest
-python -m pytest tests/ -v
-# Should see: 59 passed
-```
-
-**3. Test the correction UI standalone:**
-```python
-# Quick test script — run from transcriber/ dir
-python -c "
-from correction_ui import CorrectionWindow
-import time
-def on_corr(orig, corr):
-    print(f'Correction: {orig!r} -> {corr!r}')
-w = CorrectionWindow(on_correction=on_corr)
-w.start()
-w.show('Hello Freak, how are you today?')
-time.sleep(30)  # gives you 30 seconds to test the window
-"
-# → A dark correction window appears. Edit text, press Enter.
-# → Terminal shows the correction callback.
-```
-
-### What you test on the desktop PC (GPU required)
-
-**4. Full pipeline end-to-end:**
-```bash
-# On your desktop PC:
-cd C:\Users\metsc\Cloned_Repositories\transcriber
-git pull                           # get latest
-python -m venv venv && venv\Scripts\activate
-pip install -r requirements.txt
-
-# Start Ollama (if not running)
-ollama serve
-ollama pull qwen2.5:3b
-
-# Seed vocabulary before first run
-python vocab.py add "Freek" --hint "freak" --priority high
-python vocab.py add "Claude Code" --hint "claud coat"
-python vocab.py stats              # verify terms are loaded
-
-# Run the app
-python app.py
-```
-
-**5. Test the transcription + brain pipeline:**
-1. Hold **Ctrl+Shift+Space** → say "Hello, my name is Freek" → release
-2. Text pastes into active window. Check if "Freek" is spelled correctly (brain should help).
-3. Press **Ctrl+Shift+C** → correction window opens with the transcribed text
-4. If "Freek" was wrong, fix it and press Enter → correction logged
-5. Repeat 3 times with the same error → auto-learn triggers (check terminal logs)
-6. Run `python vocab.py stats` → should show the auto-learned term
-7. Run `python vocab.py corrections` → should show correction history
-
-**6. Test formatting commands:**
-- Hold hotkey → say "Hello comma this is a test period new line next sentence" → release
-- Should output: `Hello, this is a test.\nNext sentence`
-- Try Dutch: "Hallo komma dit is een test punt nieuwe regel"
-
-**7. Test brain export/import (Syncthing path for phone sync):**
-```bash
-python vocab.py export brain_export.json
-# Copy brain_export.json to your Syncthing folder for future Android sync
-```
-
----
-
-## Open Questions
-
-**Q8: Should the correction window auto-show by default?**
-Default: Yes (`correction_mode: auto` with 8-second timeout). Reason: The brain can't learn without corrections. Auto-show is the highest-impact UX change. Users who find it annoying can switch to `hotkey` mode.
-
-**Q9: Should toast notifications make a sound?**
-Default: No (silent notifications). Reason: Dictation already produces output — adding a notification sound on top would be jarring. Visual-only is sufficient.
-
-**Q10: Should the vocabulary manager support bulk add (paste a list of terms)?**
-Default: No — single add for now. Reason: `python vocab.py import terms.json` handles bulk import. The GUI should be simple. Bulk add is a future nice-to-have.
+| Ticket | Risk | Verification |
+|--------|------|-------------|
+| P1-1: Sound module | R1 | `py_compile sounds.py` + audible playback test |
+| P1-2: SendInput output | R2 | `py_compile output.py` + clipboard-preservation test |
+| P1-3: Auto-start | R1 | `py_compile autostart.py` + registry verify |
+| P1-4: Overlay polish | R2 | `py_compile recording_indicator.py` + visual inspection |
+| P1-5: Config + app wiring | R2 | `py_compile app.py config.py` + full smoke test |
+| P1-6: Integration test | R1 | All compile checks + pytest + manual smoke test |
 
 ---
 
 ## Resume Pack
 
-**Goal**: Polish the vocabulary brain UX so corrections flow naturally and the brain actually learns.
+**Goal**: Polish the transcriber UX — sounds, clipboard-free typing, auto-start, overlay fade/timer/hover-stop, tray hints. No new features, just make what exists feel professional.
 
-**Current state**: Complete. All 5 sub-phases implemented and syntax-checked.
+**Current state**: All source files read. Architecture designed. Research complete (SendInput via keyboard.write(), winsound SND_MEMORY, winreg Run key, WS_EX_NOACTIVATE). No code changes made yet.
 
-**What was built (Phase 3.5)**:
-- `correction_ui.py` — Rewritten: auto-show/hide with configurable timeout, no-focus passive mode (doesn't steal keystrokes from target app), quick-add vocabulary panel (Ctrl+Shift+A), position near system tray, auto-hide cancels on user interaction
-- `notifications.py` — New: winotify wrapper for native Windows 10/11 toast notifications (auto-learned terms, Ollama fallback once-per-session, vocabulary import). Graceful no-op if winotify not installed.
-- `vocab_ui.py` — New: Tkinter Toplevel vocabulary manager (dark theme, scrollable Treeview, add/remove/toggle-priority/export/import via native file dialogs). Shares Tk root with correction window.
-- `app.py` — Rewired: auto-show correction after transcription (respects correction_mode setting), notifications on auto-learn/Ollama fallback/import, "Manage vocabulary..." in tray menu, dynamic tray menu rebuilds on vocabulary changes, tooltip shows live term count
-- `config.py` — Added defaults: correction_mode (auto), correction_timeout (8), notifications (true)
-- `config.yaml` — Added settings: correction_mode, correction_timeout, notifications
-- `requirements.txt` — Added winotify>=1.1.0
+**What's ready**:
+- `sounds.py` — new file, standalone, no dependencies on other app modules
+- `autostart.py` — new file, standalone, winreg stdlib only
+- `output.py` — add `type_text()`, `output_text_streaming()`, modifier release ctypes
+- `recording_indicator.py` — rewrite with fade, timer, hover-stop, smooth pulse, WS_EX_NOACTIVATE
+- `config.py` / `config.yaml` — add `ui` section, change correction_mode to hotkey
+- `app.py` — wire sounds, output method, auto-start, tray polish, os.chdir
 
-**Resolved open questions**: Q8 (auto-show: yes, default), Q9 (silent notifications: yes), Q10 (no bulk add in GUI).
+**Start command**: `/run docs/feature-lists/FEATURE_LIST_UX_POLISH.md`
 
-**Dependencies**: `winotify>=1.1.0` (optional, for toast notifications).
+**Execution order**: P1-1 -> P1-2 -> P1-3 -> P1-4 -> P1-5 -> P1-6
+(Build standalone modules first, then overlay, then wire into app, then test)
 
-**Next step**: Phase 4 (Android Voice Input Service) or manual smoke test on desktop PC.
+**First files**: `sounds.py` (new, P1-1), then `output.py` (P1-2), then `autostart.py` (new, P1-3)
 
-**Next command**: `/run` (Phase 4)
+**Pending verification**: Full integration smoke test after all tickets complete.
+
+---
+
+## Open Questions
+
+**Q1: Sound volume level?** — Default: 0.3 (30%). Reason: Audible in a quiet room without being startling. User can disable entirely via `ui.sounds: false`. Future: configurable volume slider.
+
+**Q2: keyboard.write() inter-character delay?** — Default: 0 (no delay). Reason: SendInput is atomic per character. Most apps handle rapid input fine. If specific apps drop characters, add `ui.type_delay_ms` config later.
+
+**Q3: Auto-start default?** — Default: `false`. Reason: First enable should be a conscious user choice via tray menu. Registry writes should not surprise the user on first install.
+
+**Q4: Overlay fade duration?** — Default: 120ms (5 steps at 24ms each). Reason: Fast enough to feel responsive, slow enough to notice the transition. Reduce to 72ms if it feels sluggish during testing.
+
+**Q5: Type-vs-paste threshold for auto mode?** — Default: 200 characters. Reason: keyboard.write() at 200 chars takes ~10ms. Clipboard paste takes ~280ms regardless of length. Streaming segments are typically 10-80 chars — well under the threshold.
