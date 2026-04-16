@@ -1,7 +1,6 @@
 """Ollama LLM post-processing for dictation output.
 
-Handles punctuation, formatting commands, and code-switch cleanup
-for mixed Dutch+English transcriptions.
+Handles punctuation, formatting commands, and text cleanup.
 """
 
 import logging
@@ -47,15 +46,13 @@ def _mark_remote_healthy() -> None:
 
 
 _SYSTEM_PROMPT_TEMPLATE = """\
-You are a dictation post-processor. The user dictates in mixed Dutch and English.
+You are a dictation post-processor. The user dictates in English.
 
 Rules:
 1. Add correct punctuation and capitalization.
 2. Convert formatting commands to symbols:
 {commands_block}
-3. Preserve the EXACT language the user spoke. Do NOT translate.
-4. Mixed Dutch+English in a single sentence is intentional, not an error.
-5. Output ONLY the corrected text. No explanations, no commentary.
+3. Output ONLY the corrected text. No explanations, no commentary.
 {vocabulary_block}"""
 
 

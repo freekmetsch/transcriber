@@ -12,7 +12,7 @@ audio:
 
 # Whisper model settings
 whisper:
-  model_size: large-v3    # Options: tiny, base, small, medium, large-v2, large-v3
+  model_size: distil-large-v3  # English-only distilled; fast on GPU with near large-v3 accuracy
   device: cuda             # Options: cuda, cpu
   compute_type: float16    # Options: float16 (GPU), int8 (CPU), float32
 
@@ -27,7 +27,7 @@ postprocessing:
 streaming:
   enabled: true              # false = batch mode (record all, transcribe at end)
   silence_threshold: 0.01    # RMS energy threshold for speech detection
-  silence_duration_ms: 600   # Silence gap (ms) before segment boundary
+  silence_duration_ms: 1500   # Silence gap (ms) before segment boundary
   min_segment_ms: 500        # Ignore segments shorter than this (coughs, clicks)
   max_segment_s: 30          # Force-cut very long segments
 

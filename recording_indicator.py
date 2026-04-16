@@ -1,63 +1,73 @@
-"""Floating recording indicator — Win+H-style overlay with polish.
+"""Floating recording indicator — Windows+H-style pill bar.
 
-Features: fade transitions, elapsed timer, hover-reveal stop button,
-WS_EX_NOACTIVATE (no focus steal), smooth breathing pulse.
+Compact pill bar with drag handle, mic icon, and menu button.
+Features: fade transitions, draggable, position persistence,
+WS_EX_NOACTIVATE (no focus steal), state-based mic color changes,
+floating text popup above bar.
 """
 
 import ctypes
+import json
 import logging
 import threading
-import time
 import tkinter as tk
+from pathlib import Path
 
 log = logging.getLogger("transcriber.recording_indicator")
 
-# State -> display configuration
-_STATE_CONFIG = {
-    "listening":    {"dot": "#E74C3C", "pulse": True,  "text": "Listening\u2026",    "color": "#e0e0e0"},
-    "transcribing": {"dot": "#F39C12", "pulse": False, "text": "Transcribing\u2026", "color": "#F39C12"},
-    "processing":   {"dot": "#4A90D9", "pulse": False, "text": "Processing\u2026",   "color": "#4A90D9"},
-}
+# Position persistence
+_POS_FILE = Path(__file__).parent / "indicator_pos.json"
 
-# 8-step graduated pulse for breathing effect (1.6s full cycle at 200ms/step)
-_PULSE_STEPS_RED = [
-    "#E74C3C", "#D9443A", "#C83D35", "#993025",
-    "#993025", "#C83D35", "#D9443A", "#E74C3C",
-]
+# Bar dimensions
+_WIN_W, _WIN_H = 200, 48
+_MENU_ZONE_X = 160  # Clicks right of this open the menu
 
 # Fade alpha steps (120ms total, 24ms per step)
-_FADE_IN_ALPHAS = (0.0, 0.2, 0.4, 0.6, 0.8, 0.9)
-_FADE_OUT_ALPHAS = (0.9, 0.7, 0.5, 0.3, 0.1, 0.0)
+_FADE_IN_ALPHAS = (0.0, 0.2, 0.4, 0.6, 0.8, 0.92)
+_FADE_OUT_ALPHAS = (0.92, 0.7, 0.5, 0.3, 0.1, 0.0)
+
+# Mic color breathing steps for transcribing state (1.6s cycle, 200ms/step)
+_PULSE_STEPS = [
+    "#F39C12", "#E8921A", "#D9851F", "#C87820",
+    "#C87820", "#D9851F", "#E8921A", "#F39C12",
+]
+
+# State -> mic icon color
+_STATE_COLORS = {
+    "listening":    "#e0e0e0",  # White
+    "transcribing": "#F39C12",  # Orange
+    "processing":   "#4A90D9",  # Blue
+}
 
 
 class RecordingIndicator:
-    """Always-on-top overlay showing recording state and transcribed text.
+    """Always-on-top pill-bar overlay showing recording state.
 
     Runs on its own Tk thread. Thread-safe: call show()/hide()/set_state()/show_text()
     from any thread.
     """
 
     def __init__(self, on_stop=None):
-        self._on_stop = on_stop  # Callback for click-to-stop
+        self._on_stop = on_stop
         self._root: tk.Tk | None = None
         self._canvas: tk.Canvas | None = None
-        self._dot: int | None = None
-        self._state_text: int | None = None
-        self._result_text: int | None = None
-        self._timer_text: int | None = None
-        self._stop_bg: int | None = None
-        self._stop_label: int | None = None
+        self._mic_items: list[int] = []
         self._pulse_active: bool = False
         self._pulse_id: str | None = None
         self._pulse_step: int = 0
         self._fade_id: str | None = None
-        self._text_fade_id: str | None = None
-        self._timer_id: str | None = None
-        self._timer_start: float = 0.0
         self._fading: bool = False
         self._thread: threading.Thread | None = None
         self._ready = threading.Event()
         self._current_state: str = "listening"
+        # Drag
+        self._drag_data: dict | None = None
+        # Text popup
+        self._text_window: tk.Toplevel | None = None
+        self._text_canvas: tk.Canvas | None = None
+        self._text_item: int | None = None
+        self._text_fade_id: str | None = None
+        self._text_popup_w: int = 360
 
     def start(self):
         """Start the Tk thread. Call once during app init."""
@@ -65,109 +75,216 @@ class RecordingIndicator:
         self._thread.start()
         self._ready.wait(timeout=5)
 
+    # --- Position persistence ---
+
+    def _load_position(self) -> tuple[int, int] | None:
+        """Load saved bar position from file."""
+        try:
+            if _POS_FILE.exists():
+                data = json.loads(_POS_FILE.read_text(encoding="utf-8"))
+                return int(data["x"]), int(data["y"])
+        except Exception:
+            pass
+        return None
+
+    def _save_position(self):
+        """Save current bar position to file (called on drag-end only)."""
+        if self._root is None:
+            return
+        try:
+            _POS_FILE.write_text(
+                json.dumps({"x": self._root.winfo_x(), "y": self._root.winfo_y()}),
+                encoding="utf-8",
+            )
+        except Exception:
+            log.debug("Could not save indicator position")
+
+    # --- Tk setup ---
+
     def _run_tk(self):
-        bg = "#1e1e1e"
-        win_w, win_h = 420, 52
+        key_color = "#ff00ff"  # Transparent key — invisible corners for pill shape
+        bar_bg = "#1e1e1e"
 
         self._root = tk.Tk()
         self._root.overrideredirect(True)
         self._root.attributes("-topmost", True)
         self._root.attributes("-alpha", 0.0)
-        self._root.configure(bg=bg)
+        self._root.attributes("-transparentcolor", key_color)
+        self._root.configure(bg=key_color)
 
-        screen_w = self._root.winfo_screenwidth()
-        x = (screen_w - win_w) // 2
-        self._root.geometry(f"{win_w}x{win_h}+{x}+12")
+        # Position: saved or bottom-center, 60px from bottom edge
+        saved = self._load_position()
+        if saved:
+            x, y = saved
+        else:
+            sw = self._root.winfo_screenwidth()
+            sh = self._root.winfo_screenheight()
+            x = (sw - _WIN_W) // 2
+            y = sh - _WIN_H - 60
+        self._root.geometry(f"{_WIN_W}x{_WIN_H}+{x}+{y}")
 
         self._canvas = tk.Canvas(
-            self._root, width=win_w, height=win_h,
-            bg=bg, highlightthickness=0,
+            self._root, width=_WIN_W, height=_WIN_H,
+            bg=key_color, highlightthickness=0,
         )
         self._canvas.pack()
 
-        # Red recording dot (left side)
-        cx, cy_top, r = 20, 16, 6
-        self._dot = self._canvas.create_oval(
-            cx - r, cy_top - r, cx + r, cy_top + r,
-            fill="#E74C3C", outline="",
+        # Pill-shaped background (overlapping ovals + rectangle)
+        self._draw_pill(self._canvas, 0, 0, _WIN_W, _WIN_H, _WIN_H // 2, bar_bg)
+
+        # Drag handle: 3 thin vertical gray lines (left zone)
+        for i in range(3):
+            lx = 16 + i * 5
+            self._canvas.create_line(lx, 16, lx, 32, fill="#555555", width=1.5)
+
+        # Microphone icon (center)
+        self._draw_mic(_WIN_W // 2, _WIN_H // 2, _STATE_COLORS["listening"])
+
+        # Menu dots (right zone)
+        self._canvas.create_text(
+            _WIN_W - 24, _WIN_H // 2,
+            text="\u2022\u2022\u2022", fill="#888888",
+            font=("Segoe UI", 11), anchor="center",
         )
 
-        # State text (center, top line)
-        self._state_text = self._canvas.create_text(
-            cx + r + 12, cy_top,
-            text="Listening\u2026",
-            fill="#e0e0e0", font=("Segoe UI", 11),
-            anchor="w",
-        )
+        # Mouse bindings
+        self._canvas.bind("<ButtonPress-1>", self._on_press)
+        self._canvas.bind("<B1-Motion>", self._on_drag)
+        self._canvas.bind("<ButtonRelease-1>", self._on_release)
 
-        # Elapsed timer (right-aligned, top line)
-        self._timer_text = self._canvas.create_text(
-            win_w - 72, cy_top,
-            text="", fill="#666666", font=("Segoe UI", 9),
-            anchor="e",
-        )
+        # Text popup (separate toplevel, hidden by default)
+        self._init_text_popup(key_color)
 
-        # Transcribed text (second line, grey, smaller)
-        self._result_text = self._canvas.create_text(
-            cx + r + 12, 38,
-            text="",
-            fill="#888888", font=("Segoe UI", 9),
-            anchor="w", width=win_w - 50,
-        )
-
-        # Hover-reveal stop button (right side, initially invisible)
-        self._stop_bg = self._canvas.create_rectangle(
-            win_w - 64, 4, win_w - 4, win_h - 4,
-            fill=bg, outline="",
-        )
-        self._stop_label = self._canvas.create_text(
-            win_w - 34, win_h // 2,
-            text="Stop", fill=bg,
-            font=("Segoe UI", 9),
-        )
-
-        # Hover bindings
-        self._canvas.bind("<Enter>", lambda e: self._on_hover_enter())
-        self._canvas.bind("<Leave>", lambda e: self._on_hover_leave())
-        self._canvas.tag_bind(self._stop_bg, "<Button-1>", lambda e: self._on_stop_click())
-        self._canvas.tag_bind(self._stop_label, "<Button-1>", lambda e: self._on_stop_click())
-
-        # Set WS_EX_NOACTIVATE to prevent focus stealing
-        self._set_no_activate()
+        # Prevent focus stealing on both windows
+        self._set_no_activate(self._root)
+        self._root.after(100, lambda: self._set_no_activate(self._text_window))
 
         self._root.withdraw()
         self._ready.set()
         self._root.mainloop()
 
-    def _set_no_activate(self):
-        """Prevent overlay from stealing focus when clicked."""
+    def _init_text_popup(self, key_color):
+        """Create the floating text popup window (appears above the bar)."""
+        tp_w, tp_h = self._text_popup_w, 32
+        self._text_window = tk.Toplevel(self._root)
+        self._text_window.overrideredirect(True)
+        self._text_window.attributes("-topmost", True)
+        self._text_window.attributes("-transparentcolor", key_color)
+        self._text_window.configure(bg=key_color)
+        self._text_window.geometry(f"{tp_w}x{tp_h}+0+0")
+
+        self._text_canvas = tk.Canvas(
+            self._text_window, width=tp_w, height=tp_h,
+            bg=key_color, highlightthickness=0,
+        )
+        self._text_canvas.pack()
+        self._draw_pill(self._text_canvas, 0, 0, tp_w, tp_h, tp_h // 2, "#2a2a2a")
+        self._text_item = self._text_canvas.create_text(
+            tp_w // 2, tp_h // 2,
+            text="", fill="#cccccc", font=("Segoe UI", 10),
+            anchor="center", width=tp_w - 24,
+        )
+        self._text_window.withdraw()
+
+    # --- Drawing helpers ---
+
+    @staticmethod
+    def _draw_pill(canvas, x1, y1, x2, y2, r, fill):
+        """Draw a pill (rounded rectangle) using overlapping ovals + rectangle."""
+        canvas.create_oval(x1, y1, x1 + 2 * r, y2, fill=fill, outline="")
+        canvas.create_oval(x2 - 2 * r, y1, x2, y2, fill=fill, outline="")
+        canvas.create_rectangle(x1 + r, y1, x2 - r, y2, fill=fill, outline="")
+
+    def _draw_mic(self, cx, cy, color):
+        """Draw a microphone icon at (cx, cy). Stores item IDs for recoloring."""
+        self._mic_items = []
+        c = self._canvas
+        # Capsule top (oval)
+        self._mic_items.append(
+            c.create_oval(cx - 5, cy - 14, cx + 5, cy - 2, fill=color, outline=""))
+        # Capsule body (rect fills the oval gap)
+        self._mic_items.append(
+            c.create_rectangle(cx - 5, cy - 10, cx + 5, cy - 2, fill=color, outline=""))
+        # Cradle (U-shape arc below capsule)
+        self._mic_items.append(
+            c.create_arc(cx - 9, cy - 10, cx + 9, cy + 6,
+                         start=180, extent=180, style="arc", outline=color, width=2))
+        # Stem (vertical line)
+        self._mic_items.append(
+            c.create_line(cx, cy + 6, cx, cy + 12, fill=color, width=2))
+        # Base (horizontal line)
+        self._mic_items.append(
+            c.create_line(cx - 6, cy + 12, cx + 6, cy + 12, fill=color, width=2))
+
+    def _recolor_mic(self, color):
+        """Change the mic icon to a new color."""
+        for item_id in self._mic_items:
+            itype = self._canvas.type(item_id)
+            if itype == "arc":
+                self._canvas.itemconfig(item_id, outline=color)
+            elif itype == "line":
+                self._canvas.itemconfig(item_id, fill=color)
+            else:
+                self._canvas.itemconfig(item_id, fill=color)
+
+    # --- Mouse handling (drag + menu) ---
+
+    def _on_press(self, event):
+        if event.x > _MENU_ZONE_X:
+            self._drag_data = None
+            self._show_menu()
+        else:
+            self._drag_data = {
+                "ox": event.x_root - self._root.winfo_x(),
+                "oy": event.y_root - self._root.winfo_y(),
+            }
+
+    def _on_drag(self, event):
+        if self._drag_data is None:
+            return
+        x = event.x_root - self._drag_data["ox"]
+        y = event.y_root - self._drag_data["oy"]
+        self._root.geometry(f"+{x}+{y}")
+
+    def _on_release(self, event):
+        if self._drag_data is not None:
+            self._drag_data = None
+            self._save_position()
+
+    def _show_menu(self):
+        menu = tk.Menu(
+            self._root, tearoff=0,
+            bg="#2a2a2a", fg="#e0e0e0",
+            activebackground="#444444", activeforeground="#ffffff",
+            font=("Segoe UI", 10),
+        )
+        menu.add_command(label="Stop", command=self._on_stop_click)
         try:
-            hwnd = ctypes.windll.user32.GetParent(self._root.winfo_id())
-            GWL_EXSTYLE = -20
-            WS_EX_NOACTIVATE = 0x08000000
-            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-            ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE,
-                                                style | WS_EX_NOACTIVATE)
-        except Exception:
-            log.debug("Could not set WS_EX_NOACTIVATE")
-
-    # --- Hover-reveal stop button ---
-
-    def _on_hover_enter(self):
-        self._canvas.itemconfig(self._stop_bg, fill="#333333")
-        self._canvas.itemconfig(self._stop_label, fill="#e0e0e0")
-        # Move timer out of the way when stop button is visible
-        self._canvas.itemconfig(self._timer_text, state="hidden")
-
-    def _on_hover_leave(self):
-        bg = "#1e1e1e"
-        self._canvas.itemconfig(self._stop_bg, fill=bg)
-        self._canvas.itemconfig(self._stop_label, fill=bg)
-        self._canvas.itemconfig(self._timer_text, state="normal")
+            menu.tk_popup(
+                self._root.winfo_x() + _WIN_W - 10,
+                self._root.winfo_y() - 5,
+            )
+        finally:
+            menu.grab_release()
 
     def _on_stop_click(self):
         if self._on_stop:
             self._on_stop()
+
+    # --- WS_EX_NOACTIVATE ---
+
+    @staticmethod
+    def _set_no_activate(window):
+        """Prevent a window from stealing focus when clicked."""
+        try:
+            hwnd = ctypes.windll.user32.GetParent(window.winfo_id())
+            GWL_EXSTYLE = -20
+            WS_EX_NOACTIVATE = 0x08000000
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            ctypes.windll.user32.SetWindowLongW(
+                hwnd, GWL_EXSTYLE, style | WS_EX_NOACTIVATE)
+        except Exception:
+            log.debug("Could not set WS_EX_NOACTIVATE")
 
     # --- Fade animations ---
 
@@ -191,7 +308,7 @@ class RecordingIndicator:
                 self._fade_id = None
                 self._fading = False
                 self._root.withdraw()
-                self._root.attributes("-alpha", 0.9)  # Reset for next show
+                self._root.attributes("-alpha", 0.92)  # Reset for next show
         else:
             self._fading = False
 
@@ -202,35 +319,13 @@ class RecordingIndicator:
             self._fade_id = None
         self._fading = False
 
-    # --- Elapsed timer ---
-
-    def _start_timer(self):
-        self._timer_start = time.monotonic()
-        self._canvas.itemconfig(self._timer_text, text="0:00")
-        self._timer_id = self._root.after(1000, self._update_timer)
-
-    def _update_timer(self):
-        if self._root is None:
-            return
-        elapsed = int(time.monotonic() - self._timer_start)
-        minutes, seconds = divmod(elapsed, 60)
-        self._canvas.itemconfig(self._timer_text, text=f"{minutes}:{seconds:02d}")
-        self._timer_id = self._root.after(1000, self._update_timer)
-
-    def _cancel_timer(self):
-        if self._timer_id is not None:
-            self._root.after_cancel(self._timer_id)
-            self._timer_id = None
-        if self._canvas:
-            self._canvas.itemconfig(self._timer_text, text="")
-
-    # --- Smooth pulse animation (breathing effect) ---
+    # --- Pulse animation (mic color breathing for transcribing state) ---
 
     def _pulse(self):
         if self._canvas is None or not self._pulse_active:
             return
-        color = _PULSE_STEPS_RED[self._pulse_step % len(_PULSE_STEPS_RED)]
-        self._canvas.itemconfig(self._dot, fill=color)
+        color = _PULSE_STEPS[self._pulse_step % len(_PULSE_STEPS)]
+        self._recolor_mic(color)
         self._pulse_step += 1
         self._pulse_id = self._root.after(200, self._pulse)
 
@@ -246,6 +341,16 @@ class RecordingIndicator:
             self._root.after_cancel(self._pulse_id)
             self._pulse_id = None
 
+    # --- Text popup positioning ---
+
+    def _position_text_popup(self):
+        """Position the text popup centered above the bar."""
+        bar_x = self._root.winfo_x()
+        bar_y = self._root.winfo_y()
+        tp_x = bar_x + (_WIN_W - self._text_popup_w) // 2
+        tp_y = bar_y - 40
+        self._text_window.geometry(f"+{tp_x}+{tp_y}")
+
     # --- Public API (all thread-safe) ---
 
     def show(self):
@@ -256,9 +361,8 @@ class RecordingIndicator:
     def _do_show(self):
         self._cancel_fade()
         self._current_state = "listening"
-        self._apply_state()
-        self._canvas.itemconfig(self._result_text, text="")
-        self._start_timer()
+        self._stop_pulse()
+        self._recolor_mic(_STATE_COLORS["listening"])
         self._root.attributes("-alpha", 0.0)
         self._root.deiconify()
         self._root.lift()
@@ -272,55 +376,84 @@ class RecordingIndicator:
 
     def _do_hide(self):
         self._stop_pulse()
-        self._cancel_timer()
-        # Cancel any pending text fade
         if self._text_fade_id is not None:
             self._root.after_cancel(self._text_fade_id)
             self._text_fade_id = None
-        # If currently fading in, cancel and fade out instead
+        if self._text_window:
+            self._text_window.withdraw()
         self._cancel_fade()
         self._fading = True
         self._fade_out_step(0)
 
     def set_state(self, state: str):
         """Set display state: 'listening', 'transcribing', or 'processing'. Thread-safe."""
-        if self._root and state in _STATE_CONFIG:
+        if self._root and state in _STATE_COLORS:
             self._root.after(0, lambda: self._do_set_state(state))
 
     def _do_set_state(self, state: str):
         self._current_state = state
-        self._apply_state()
-
-    def _apply_state(self):
-        """Apply the current state's visual configuration."""
-        cfg = _STATE_CONFIG[self._current_state]
-        self._canvas.itemconfig(self._dot, fill=cfg["dot"])
-        self._canvas.itemconfig(self._state_text, text=cfg["text"], fill=cfg["color"])
-
         self._stop_pulse()
-        if cfg["pulse"]:
+        self._recolor_mic(_STATE_COLORS[state])
+        if state == "transcribing":
             self._start_pulse()
 
     def show_text(self, text: str):
-        """Show transcribed text briefly (auto-fades after 3s). Thread-safe."""
+        """Show transcribed text as popup above bar (auto-fades after 3s). Thread-safe."""
         if self._root:
             self._root.after(0, lambda: self._do_show_text(text))
 
     def _do_show_text(self, text: str):
-        # Cancel any pending fade
         if self._text_fade_id is not None:
             self._root.after_cancel(self._text_fade_id)
-
-        # Truncate long text for display
         display = text if len(text) <= 60 else text[:57] + "\u2026"
-        self._canvas.itemconfig(self._result_text, text=display)
-
-        # Auto-fade after 3 seconds
+        self._text_canvas.itemconfig(self._text_item, text=display)
+        self._position_text_popup()
+        self._text_window.deiconify()
+        self._text_window.lift()
         self._text_fade_id = self._root.after(3000, self._do_fade_text)
 
     def _do_fade_text(self):
         self._text_fade_id = None
-        self._canvas.itemconfig(self._result_text, text="")
+        if self._text_window:
+            self._text_window.withdraw()
+
+    def show_feedback(self, feedback_type: str = "success"):
+        """Flash the mic icon briefly to confirm an event. Thread-safe.
+
+        Types: 'success' (green), 'warning' (yellow), 'error' (red).
+        Works even if the indicator is currently hidden (shows briefly then hides).
+        """
+        if self._root:
+            self._root.after(0, lambda: self._do_show_feedback(feedback_type))
+
+    def _do_show_feedback(self, feedback_type: str):
+        colors = {
+            "success": "#2ECC71",
+            "warning": "#F1C40F",
+            "error": "#E74C3C",
+        }
+        color = colors.get(feedback_type, "#2ECC71")
+        was_hidden = not self._root.winfo_viewable()
+
+        if was_hidden:
+            self._cancel_fade()
+            self._root.attributes("-alpha", 0.92)
+            self._root.deiconify()
+            self._root.lift()
+
+        self._stop_pulse()
+        self._recolor_mic(color)
+
+        def _revert():
+            if was_hidden:
+                self._root.withdraw()
+            else:
+                state_color = _STATE_COLORS.get(self._current_state, "#e0e0e0")
+                self._recolor_mic(state_color)
+                if self._current_state == "transcribing":
+                    self._start_pulse()
+
+        self._root.after(350, _revert)
 
     def destroy(self):
         """Shut down the Tk thread."""

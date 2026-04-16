@@ -19,6 +19,15 @@ venv/
 # Local config override (machine-specific settings)
 config.local.yaml
 
+# Log files (rotating file logger)
+*.log
+
+# Desktop shortcut icon (generated)
+icon.ico
+
+# Recording indicator position (machine-specific)
+indicator_pos.json
+
 # Claude Code local-only files
 .claude/hooks/
 .claude/projects/

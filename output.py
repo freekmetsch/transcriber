@@ -154,5 +154,67 @@ def output_text(text: str, method: str = "auto"):
 
 
 def output_text_streaming(text: str, method: str = "auto"):
-    """Output text without clipboard save/restore (streaming mode)."""
-    _route_output(text, method, paste_text_streaming)
+    """Output text without clipboard save/restore (streaming mode).
+
+    Streaming always prefers SendInput (type) over clipboard paste to avoid
+    clobbering the user's clipboard. Falls back to paste only on failure.
+    """
+    if method == "paste":
+        # User explicitly chose paste — respect it
+        paste_text_streaming(text)
+    else:
+        # auto or type: always try SendInput first for streaming
+        try:
+            type_text(text)
+        except Exception:
+            log.warning("type_text failed in streaming, falling back to clipboard paste")
+            paste_text_streaming(text)
+
+
+def _output_with_method(text: str, method: str, streaming: bool):
+    """Route text output based on method and mode (streaming vs batch)."""
+    if streaming:
+        output_text_streaming(text, method)
+    else:
+        _route_output(text, method, paste_text)
+
+
+def output_text_to_target(text: str, target_hwnd: int, method: str = "auto",
+                          streaming: bool = False) -> bool:
+    """Output text to a specific target window, refocusing if needed.
+
+    If the target window is no longer foreground, refocuses it before output,
+    then returns focus to wherever the user was.
+
+    Returns True if text was output successfully (regardless of refocus).
+    """
+    import focus_guard
+
+    if not target_hwnd or not focus_guard.is_target_alive(target_hwnd):
+        log.info("Target gone — outputting to current window")
+        _output_with_method(text, method, streaming)
+        return True
+
+    current_fg = focus_guard.GetForegroundWindow()
+
+    if current_fg == target_hwnd:
+        # Already in the right window — output normally
+        _output_with_method(text, method, streaming)
+        return True
+
+    # Need to refocus: save where user is, switch to target, output, switch back
+    log.info("Refocusing from hwnd=%d to target hwnd=%d", current_fg, target_hwnd)
+
+    if focus_guard.refocus_target(target_hwnd):
+        time.sleep(0.05)  # Brief settle after refocus
+        _output_with_method(text, method, streaming)
+        time.sleep(0.05)
+        # Return focus to where the user was
+        if focus_guard.is_target_alive(current_fg):
+            focus_guard.refocus_target(current_fg)
+        return True
+    else:
+        # Refocus failed — output to current window (never lose text)
+        log.warning("Refocus failed — outputting to current window as fallback")
+        _output_with_method(text, method, streaming)
+        return True

@@ -77,6 +77,35 @@ def notify_vocab_added(term: str):
     )
 
 
+# --- App-level notifications (not brain-gated) ---
+
+def notify_startup(hotkey: str):
+    """Notify that the transcriber is ready."""
+    _send("Transcriber ready", f"Press {hotkey} to dictate")
+    log.info("Toast: startup ready")
+
+
+def notify_info(title: str, detail: str = ""):
+    """Generic info toast for one-off success/status events."""
+    _send(title, detail)
+    log.info("Toast: info — %s: %s", title, detail)
+
+
+def notify_error(title: str, detail: str):
+    """Notify about a transcription or pipeline error."""
+    _send(title, detail)
+    log.info("Toast: error — %s: %s", title, detail)
+
+
+def notify_guard_blocked(class_name: str):
+    """Notify that recording was blocked (no text field detected)."""
+    _send(
+        "No text field detected",
+        f"Click a text field first (window class: {class_name})",
+    )
+    log.info("Toast: guard blocked (%s)", class_name)
+
+
 def is_available() -> bool:
     """Check if toast notifications are available."""
     return _AVAILABLE

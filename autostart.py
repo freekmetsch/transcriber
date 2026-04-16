@@ -15,14 +15,31 @@ _APP_NAME = "Transcriber"
 _REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
-def _get_launch_command() -> str:
-    """Build the command string for auto-start using absolute paths."""
+def resolve_pythonw() -> str:
+    """Resolve the path to pythonw.exe (windowless Python) for the app.
+
+    Prefers the local venv if it exists (dependencies live there),
+    then falls back to the current interpreter's pythonw.exe.
+    Shared by autostart and shortcut modules.
+    """
+    # Check for local venv first — dependencies are installed there
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    venv_pythonw = os.path.join(app_dir, "venv", "Scripts", "pythonw.exe")
+    if os.path.exists(venv_pythonw):
+        return venv_pythonw
+
+    # Fall back to current interpreter
     python = sys.executable
-    # Prefer pythonw.exe for windowless launch
     if python.endswith("python.exe"):
         pythonw = python.replace("python.exe", "pythonw.exe")
         if os.path.exists(pythonw):
-            python = pythonw
+            return pythonw
+    return python
+
+
+def _get_launch_command() -> str:
+    """Build the command string for auto-start using absolute paths."""
+    python = resolve_pythonw()
     script = os.path.abspath(os.path.join(os.path.dirname(__file__), "app.py"))
     return f'"{python}" "{script}"'
 

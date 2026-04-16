@@ -4,6 +4,7 @@ Entry point: system tray icon, global hotkey, recording/transcription pipeline.
 """
 
 import logging
+import logging.handlers
 import os
 import sys
 import threading
@@ -15,19 +16,32 @@ import pystray
 from PIL import Image, ImageDraw
 
 import autostart
+import focus_guard
+import notifications
+import shortcut
 import sounds
 from config import load_config
 from recorder import Recorder, StreamingRecorder
 from transcriber import Transcriber
 from postprocessor import postprocess_text, ollama_health_check
-from output import (output_text, output_text_streaming,
+from output import (output_text, output_text_streaming, output_text_to_target,
                     save_clipboard, restore_clipboard)
 from recording_indicator import RecordingIndicator
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+# Logging: console + rotating file (works with both python.exe and pythonw.exe)
+_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+_LOG_FILE = Path(__file__).parent / "transcriber.log"
+
+logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT)
+try:
+    _file_handler = logging.handlers.RotatingFileHandler(
+        _LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8",
+    )
+    _file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+    logging.getLogger().addHandler(_file_handler)
+except PermissionError:
+    logging.warning("Cannot write to %s — file logging disabled", _LOG_FILE)
+
 log = logging.getLogger("transcriber")
 
 
@@ -64,6 +78,8 @@ class TranscriberApp:
         self._lock = threading.Lock()
         self._icon: pystray.Icon | None = None
         self._last_toggle_time: float = 0.0
+        self._target_hwnd: int = 0
+        self._last_action_status: str = ""
 
         # Streaming recorder (created if streaming enabled)
         self._streaming_enabled = self.config["streaming"]["enabled"]
@@ -148,9 +164,8 @@ class TranscriberApp:
         # Notifications
         self._notifications_enabled = brain_cfg.get("notifications", True)
         if self._notifications_enabled:
-            import notifications
             if notifications.is_available():
-                log.info("Toast notifications enabled")
+                log.info("Toast notifications enabled (brain)")
             else:
                 log.info("Toast notifications unavailable (winotify not installed)")
 
@@ -182,7 +197,6 @@ class TranscriberApp:
             for entry in learned:
                 log.info("Auto-learned term: %s (was: %s)", entry["term"], entry["phonetic_hint"])
                 if self._notifications_enabled:
-                    import notifications
                     notifications.notify_auto_learned(
                         entry["term"], entry["phonetic_hint"],
                         brain_cfg["auto_learn_threshold"],
@@ -197,7 +211,6 @@ class TranscriberApp:
         log.info("Quick-added vocab: %s (hint=%s, priority=%s)", term, hint, priority)
 
         if self._notifications_enabled:
-            import notifications
             notifications.notify_vocab_added(term)
 
         self._rebuild_prompts()
@@ -240,11 +253,14 @@ class TranscriberApp:
             )
 
     def _tray_tooltip(self) -> str:
-        """Build tray icon tooltip with hotkey hint and vocabulary count."""
+        """Build tray icon tooltip with hotkey hint, vocab count, and last action."""
         hotkey = self.config["hotkey"].replace("+", "+").title()
+        base = f"Transcriber — {hotkey} to dictate"
         if self._brain is not None:
-            return f"Transcriber — {hotkey} to dictate ({self._brain.term_count()} terms)"
-        return f"Transcriber — {hotkey} to dictate"
+            base += f" ({self._brain.term_count()} terms)"
+        if self._last_action_status:
+            base += f"\n{self._last_action_status}"
+        return base
 
     def _toggle_recording(self):
         # Debounce: keyboard library fires repeatedly while keys are held
@@ -262,12 +278,24 @@ class TranscriberApp:
                 if self._streaming_enabled:
                     threading.Thread(target=self._stop_streaming, daemon=True).start()
                 else:
-                    self._recording_indicator.hide()
+                    # Keep indicator visible during transcription — hide after output
+                    self._recording_indicator.set_state("transcribing")
                     threading.Thread(target=self._stop_and_transcribe, daemon=True).start()
             else:
+                # Text field guard: block recording if no text field detected
+                is_viable, class_name, hwnd = focus_guard.check_text_field()
+                if not is_viable:
+                    log.info("Recording blocked: no text field (%s)", class_name)
+                    sounds.play_error()
+                    notifications.notify_guard_blocked(class_name)
+                    self._last_action_status = f"Blocked: {class_name}"
+                    self._update_icon(False)
+                    return
+
+                self._target_hwnd = hwnd
                 self._recording = True
                 sounds.play_start()
-                log.info("Recording started (toggle)")
+                log.info("Recording started — target: %s (hwnd=%d)", class_name, hwnd)
                 self._update_icon(True)
                 if self._streaming_enabled:
                     self._start_streaming()
@@ -289,14 +317,20 @@ class TranscriberApp:
         self.streaming_recorder.start(on_segment=self._on_speech_segment)
 
     def _on_speech_segment(self, audio):
-        """Called per speech segment from the StreamingRecorder worker thread."""
+        """Called per speech segment from the StreamingRecorder worker thread.
+
+        Hot path: Whisper → formatting commands → output. No LLM in the loop.
+        """
         self._recording_indicator.set_state("transcribing")
+        t_start = time.monotonic()
 
         # Transcribe with context from previous segment
         prompt = self._segment_context or self._initial_prompt or None
         try:
+            t_whisper = time.monotonic()
             text = self.transcriber.transcribe(audio, initial_prompt=prompt)
             text = text.strip()
+            t_whisper = time.monotonic() - t_whisper
         except Exception:
             log.exception("Segment transcription failed")
             sounds.play_error()
@@ -309,27 +343,28 @@ class TranscriberApp:
 
         log.info("Segment raw: %s", text)
 
-        # Post-process via Ollama
-        self._recording_indicator.set_state("processing")
-        result = postprocess_text(
-            text,
-            self.config["postprocessing"],
-            vocabulary_text=self._vocabulary_text,
-        )
+        # Apply formatting commands directly (instant, no LLM round-trip)
+        from commands import apply_formatting_commands
+        result = apply_formatting_commands(text)
+        t_total = time.monotonic() - t_start
+        log.info("Segment timing: whisper=%.2fs, total=%.2fs", t_whisper, t_total)
 
         # Add space between consecutive segments
         if self._segment_context:
             result = " " + result
 
-        # Output into active window
+        # Output into target window (refocus if user switched away)
         output_method = self.config["ui"]["output_method"]
-        output_text_streaming(result, method=output_method)
+        output_text_to_target(result, self._target_hwnd,
+                              method=output_method, streaming=True)
 
         # Update state for next segment
         self._segment_context = result.strip()
         self._last_transcription = result.strip()
-        self._recording_indicator.show_text(result.strip())
+        self._last_action_status = f"Dictated: {result.strip()[:40]}"
         self._recording_indicator.set_state("listening")
+        self._recording_indicator.show_text(result.strip())
+        self._recording_indicator.show_feedback("success")
         log.info("Segment output: %s", result.strip())
 
     def _stop_streaming(self):
@@ -354,39 +389,55 @@ class TranscriberApp:
         if audio is None or len(audio) == 0:
             log.warning("No audio captured")
             sounds.play_error()
+            self._recording_indicator.hide()
             return
         try:
+            t_start = time.monotonic()
+            t_whisper = time.monotonic()
             text = self.transcriber.transcribe(
                 audio,
                 initial_prompt=self._initial_prompt or None,
             )
             text = text.strip()
+            t_whisper = time.monotonic() - t_whisper
             if text:
                 log.info("Raw transcription: %s", text)
+                self._recording_indicator.set_state("processing")
+                t_ollama = time.monotonic()
                 result = postprocess_text(
                     text,
                     self.config["postprocessing"],
                     vocabulary_text=self._vocabulary_text,
                 )
+                t_ollama = time.monotonic() - t_ollama
+                t_total = time.monotonic() - t_start
+                log.info("Batch timing: whisper=%.2fs, ollama=%.2fs, total=%.2fs", t_whisper, t_ollama, t_total)
                 # Check if postprocessing fell back to raw text
                 if result == text and self.config["postprocessing"]["enabled"]:
-                    if self._notifications_enabled:
-                        import notifications
-                        notifications.notify_ollama_fallback()
+                    notifications.notify_ollama_fallback()
 
                 log.info("Output: %s", result)
                 self._last_transcription = result
+                self._last_action_status = f"Dictated: {result[:40]}"
                 output_method = self.config["ui"]["output_method"]
-                output_text(result, method=output_method)
+                output_text_to_target(result, self._target_hwnd, method=output_method)
+
+                # Green flash confirmation, then hide
+                self._recording_indicator.show_feedback("success")
+                time.sleep(0.4)
+                self._recording_indicator.hide()
 
                 # Auto-show correction window if configured
                 self._show_correction_auto(result)
             else:
                 log.warning("Transcription returned empty text")
                 sounds.play_error()
+                self._recording_indicator.hide()
         except Exception:
             log.exception("Transcription failed")
             sounds.play_error()
+            notifications.notify_error("Transcription failed", "Check microphone and try again")
+            self._recording_indicator.hide()
 
     def _register_hotkey(self):
         hotkey = self.config["hotkey"]
@@ -427,7 +478,6 @@ class TranscriberApp:
         self._rebuild_prompts()
 
         if self._notifications_enabled and imported > 0:
-            import notifications
             notifications.notify_vocab_imported(imported, "brain_export.json")
 
         log.info("Vocabulary imported and prompts rebuilt")
@@ -467,6 +517,10 @@ class TranscriberApp:
 
         menu_items.extend([
             pystray.MenuItem(
+                "Create Desktop Shortcut",
+                self._create_shortcut,
+            ),
+            pystray.MenuItem(
                 lambda item: "Start with Windows  \u2713" if autostart.is_enabled()
                              else "Start with Windows",
                 lambda icon, item: autostart.toggle(),
@@ -486,6 +540,14 @@ class TranscriberApp:
             except Exception:
                 # pystray backend may not support update_menu — tooltip still updates
                 log.debug("Tray menu update not supported, tooltip updated instead")
+
+    def _create_shortcut(self, icon=None, item=None):
+        """Create a desktop shortcut from tray menu."""
+        success = shortcut.create_desktop_shortcut()
+        if success:
+            notifications.notify_info("Desktop shortcut created", "Launch Transcriber from your desktop")
+        else:
+            notifications.notify_error("Shortcut failed", "Check log for details")
 
     def _quit(self, icon, item):
         log.info("Shutting down")
@@ -543,6 +605,10 @@ class TranscriberApp:
             "Transcriber ready. Press %s to start/stop dictation.%s",
             self.config["hotkey"], brain_status,
         )
+
+        # Startup toast
+        notifications.notify_startup(self.config["hotkey"])
+
         try:
             self._icon.run()
         finally:
