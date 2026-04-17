@@ -76,6 +76,8 @@ ui:
   overlay_visible_on_start: true     # Always-visible pill (Win+H-style). false = start hidden.
   toggle_overlay_hotkey: ctrl+shift+h  # Show/hide the overlay (no-op if dismissed via tray)
   cycle_mode_hotkey: ctrl+shift+m      # Cycle dictation modes (Default / Email / Code ...)
+  repaste_hotkey: ctrl+alt+v           # Re-paste the most recent transcription into the focused text field
+  history_length: 10                   # Items kept in the in-memory transcription history (drives Copy last + re-paste)
 
 # Dictation modes — omit or leave null to use built-ins (Default, Email, Code).
 # Schema per entry: { name, polish_prompt_addendum, output_format }.

@@ -9,6 +9,8 @@ import os
 import sys
 import threading
 import time
+from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 
 import keyboard
@@ -47,6 +49,13 @@ except PermissionError:
     logging.warning("Cannot write to %s — file logging disabled", _LOG_FILE)
 
 log = logging.getLogger("transcriber")
+
+
+@dataclass
+class HistoryEntry:
+    text: str
+    language: str
+    timestamp: float
 
 
 _TRAY_STATE_COLORS = {
@@ -200,7 +209,9 @@ class TranscriberApp:
         self._vocab_manager = None
         self._initial_prompt: str = ""
         self._vocabulary_text: str = ""
-        self._last_transcription: str = ""
+        self._history: deque[HistoryEntry] = deque(
+            maxlen=int(self.config["ui"].get("history_length", 10)),
+        )
 
         # Always-visible overlay (Win+H-style)
         self._overlay_close_toast_shown = False
@@ -223,6 +234,15 @@ class TranscriberApp:
         brain_cfg = self.config["brain"]
         if brain_cfg["enabled"]:
             self._init_brain(brain_cfg)
+
+    @property
+    def _last_transcription(self) -> str:
+        return self._history[-1].text if self._history else ""
+
+    def _append_history(self, text: str, language: str | None = ""):
+        self._history.append(
+            HistoryEntry(text=text, language=language or "", timestamp=time.time()),
+        )
 
     def _init_brain(self, brain_cfg: dict):
         """Initialize the vocabulary brain, correction UI, vocab manager, and notifications."""
@@ -409,7 +429,8 @@ class TranscriberApp:
             else:
                 log.debug("Voice command: delete — nothing to undo")
             self._segment_context = ""
-            self._last_transcription = ""
+            if self._history:
+                self._history.pop()
             self._last_output_length = 0
             if self._recording:
                 self._set_state("listening")
@@ -560,7 +581,7 @@ class TranscriberApp:
 
         self._last_output_length = len(result)
         self._segment_context = result.strip()
-        self._last_transcription = result.strip()
+        self._append_history(result.strip(), language=self.dictator.last_language)
         self._last_action_status = f"Dictated: {result.strip()[:40]}"
         self._set_state("listening")
         if self.config["ui"]["show_language"]:
@@ -620,7 +641,7 @@ class TranscriberApp:
                     t_dictate, self.dictator.last_path, t_total,
                 )
                 log.info("Output: %s", result)
-                self._last_transcription = result
+                self._append_history(result, language=self.dictator.last_language)
                 self._last_action_status = f"Dictated: {result[:40]}"
                 output_method = self.config["ui"]["output_method"]
                 output_text_to_target(result, self._target_hwnd, method=output_method)
@@ -669,6 +690,16 @@ class TranscriberApp:
             except Exception:
                 log.exception("Failed to register mode cycle hotkey %s", cycle_hk)
 
+        # Re-paste last transcription hotkey (Ctrl+Alt+V by default; avoids the
+        # browser/Office "paste plain text" collision on Ctrl+Shift+V).
+        repaste_hk = self.config["ui"].get("repaste_hotkey", "ctrl+alt+v")
+        if repaste_hk:
+            try:
+                keyboard.add_hotkey(repaste_hk, self._repaste_last, suppress=True)
+                log.info("Re-paste hotkey registered: %s", repaste_hk)
+            except Exception:
+                log.exception("Failed to register re-paste hotkey %s", repaste_hk)
+
         # Esc cancels recording in-flight — suppress=False so Esc also reaches target apps
         try:
             keyboard.add_hotkey("esc", self._on_esc, suppress=False)
@@ -713,6 +744,41 @@ class TranscriberApp:
                 log.exception("Failed to cancel recorder")
         self._return_to_idle()
         self._last_action_status = "Cancelled"
+
+    def _copy_last(self, icon=None, item=None):
+        """Copy the most recent transcription to the clipboard."""
+        if not self._history:
+            sounds.play_error()
+            return
+        import pyperclip
+        text = self._history[-1].text
+        try:
+            pyperclip.copy(text)
+            self._last_action_status = "Copied last transcription"
+            log.info("Copied last transcription (%d chars)", len(text))
+        except Exception:
+            log.exception("Copy last failed")
+            sounds.play_error()
+
+    def _repaste_last(self):
+        """Re-paste the most recent transcription into the currently focused text field."""
+        if not self._history:
+            sounds.play_error()
+            notifications.notify_info("Nothing to re-paste", "History is empty")
+            return
+        is_viable, class_name, hwnd = focus_guard.check_text_field()
+        if not is_viable:
+            sounds.play_error()
+            notifications.notify_guard_blocked(class_name)
+            return
+        text = self._history[-1].text
+        method = self.config["ui"]["output_method"]
+        try:
+            output_text_to_target(text, hwnd, method=method)
+            log.info("Re-pasted last transcription (%d chars)", len(text))
+        except Exception:
+            log.exception("Re-paste failed")
+            sounds.play_error()
 
     def _export_vocabulary(self, icon=None, item=None):
         """Export vocabulary to JSON file."""
@@ -781,6 +847,11 @@ class TranscriberApp:
                 lambda item: "Show overlay" if self._recording_indicator.is_dismissed()
                              else "Hide overlay",
                 lambda icon, item: self._recording_indicator.toggle_visibility(),
+            ),
+            pystray.MenuItem(
+                "Copy last transcription",
+                self._copy_last,
+                enabled=lambda item: bool(self._history),
             ),
             pystray.MenuItem(
                 lambda item: f"Mode: {self._modes.current().name}  "
