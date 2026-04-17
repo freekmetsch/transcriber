@@ -32,7 +32,7 @@ from transcriber import Transcriber
 from postprocessor import build_cloud_system_prompt, ollama_health_check
 from output import (output_text_to_target,
                     save_clipboard, restore_clipboard)
-from recording_indicator_tk import RecordingIndicator
+# RecordingIndicator is imported dynamically below based on ui.overlay_backend.
 
 # Logging: console + rotating file (works with both python.exe and pythonw.exe)
 _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -215,6 +215,13 @@ class TranscriberApp:
 
         # Always-visible overlay (Win+H-style)
         self._overlay_close_toast_shown = False
+        backend = (self.config["ui"].get("overlay_backend") or "qt").lower()
+        if backend == "qt":
+            from recording_indicator_qt import RecordingIndicator
+        else:
+            if backend != "tk":
+                log.warning("Unknown ui.overlay_backend=%r; falling back to tk", backend)
+            from recording_indicator_tk import RecordingIndicator
         self._recording_indicator = RecordingIndicator(
             on_mic_click=self._toggle_recording,
             on_dismiss=self._on_overlay_dismiss,

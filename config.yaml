@@ -73,6 +73,7 @@ ui:
   auto_start: false          # Start with Windows (toggle via tray menu)
   show_level_meter: true     # Live mic level bar during recording
   show_language: true        # EN/NL badge on the text popup after each segment
+  overlay_backend: qt                # Overlay rendering backend: qt (PySide6, default) | tk (legacy, kept as one-version fallback).
   overlay_visible_on_start: true     # Always-visible pill (Win+H-style). false = start hidden.
   toggle_overlay_hotkey: ctrl+shift+h  # Show/hide the overlay (no-op if dismissed via tray)
   cycle_mode_hotkey: ctrl+shift+m      # Cycle dictation modes (Default / Email / Code ...)

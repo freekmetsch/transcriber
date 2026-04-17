@@ -1,8 +1,8 @@
 # Feature List: UI + Overlay — Merged Remaining Work
 
 Date: 2026-04-17
-Status: In progress — Q1-1, Q2-1 / Q2-2 / Q2-3 shipped 2026-04-17
-Open phases: Q1-2…Q1-4 (PySide6 port body), Q2-4 (hover-expand, gated on Q1), Q2-5 (tray Session history, gated on Q2-4), Q3, Q4
+Status: In progress — Q1-1 (re-done after package-name fix), Q1-2, Q1-3, Q2-1 / Q2-2 / Q2-3 shipped 2026-04-17
+Open phases: Q1-4 (hover-expand), Q2-4 (hover-expand wiring, gated on Q1-4), Q2-5 (tray Session history, gated on Q2-4), Q3, Q4
 Scope: All not-yet-shipped features from `FEATURE_LIST_UI_OVERHAUL.md` (2026-04-15)
   and `FEATURE_LIST_OVERLAY_OVERHAUL.md` (2026-04-17)
 Owner: Freek
@@ -208,8 +208,10 @@ redesign. That plan's decisions stand.
   `recording_indicator_tk.py`. Add `ui.overlay_backend: qt | tk` flag;
   `app.py` imports the selected module.
 - **Q1-3** = P3-3: Mica fallback for pre-22H2. Detect
-  `sys.getwindowsversion().build < 22621` → skip `setMicaEffect`, use
-  solid `#1e1e1e` with `QPainterPath` rounded mask.
+  `sys.getwindowsversion().build < 22621` → skip
+  `WindowEffect().setMicaEffect(hwnd, isDarkMode=True, isAlt=False)`.
+  Fallback path paints a solid `#1e1e1e` rounded pill via `QPainterPath`
+  in `paintEvent`; Mica layers on top when available.
 - **Q1-4** = P3-4: hover-expand showing the last 3 history entries from
   the deque built in Q2-1. Click = re-paste. Right-click = discard.
   Privacy toggle (default OFF) in gear popover.
@@ -339,12 +341,23 @@ counter, Q4 discoverability + VAD tuner. Sustainable order: port first
 to avoid building theming / segment counter twice.
 
 **Current state (updated 2026-04-17 end-of-day)**:
-- Q1-1 scaffolding — `PySide6==6.8.*` + `PySide6-Frameless-Window>=0.4`
-  added to `requirements.txt`; `recording_indicator.py` renamed to
-  `recording_indicator_tk.py` via `git mv`; `app.py` import updated;
-  empty `recording_indicator_qt.py` scaffold with NotImplementedError
-  stubs matching the Tk public API. No `ui.overlay_backend` flag yet
-  (that lands with Q1-2 switch logic).
+- Q1-1 redone — prior commit pinned a non-existent package
+  (`PySide6-Frameless-Window>=0.4`). Corrected to
+  `PySideSix-Frameless-Window>=0.8.1` (zhiyiyo's PySide6 branch on PyPI;
+  import name `qframelesswindow`, class `AcrylicWindow` / helper
+  `WindowEffect`). Clean-venv install + import smoke now pass.
+- Q1-2 — `recording_indicator_qt.py` implements the full pill body on a
+  dedicated Qt worker thread (mirrors Tk threading model so
+  `pystray.Icon.run()` keeps the main thread). Custom `paintEvent` draws
+  pill + gear + mic + level bar + elapsed timer + mode chip + close X;
+  hit zones match the Tk `x`-coordinate ranges. Thread-safe public API
+  via Qt signals. Drag + position persistence reuse `indicator_pos.json`.
+  `ui.overlay_backend: qt | tk` added to `config.yaml` (default `qt`);
+  `app.py` imports the selected module inside `__init__`.
+- Q1-3 — Mica applied in `showEvent` when
+  `sys.getwindowsversion().build >= 22621`; silent fallback to the solid
+  `#1e1e1e` rounded paint otherwise. `WS_EX_NOACTIVATE` still applied
+  via `ctypes` post-show to preserve no-focus-steal behavior.
 - Q2-1 history deque (`HistoryEntry`, `deque(maxlen=ui.history_length)`,
   `_last_transcription` now a property, streaming + batch + `delete that`
   rewired to `_append_history` / `deque.pop`) — shipped.
@@ -369,21 +382,20 @@ to avoid building theming / segment counter twice.
   "stop listening", "delete that", Code mode = `local-raw`).
 
 **First command (next window)**: `/run docs/feature-lists/FEATURE_LIST_UI_OVERHAUL_MERGED.md`
-— resume at Q1-2.
+— resume at Q1-4 (hover-expand history panel).
 
-**First files to touch in Q1-2**:
-- `recording_indicator_qt.py` — replace scaffolded `NotImplementedError`
-  methods with a working Qt pill (PySide6 + qframelesswindow). Match
-  the Tk public API exactly (see `recording_indicator_tk.py` for
-  reference).
-- `config.yaml` — add `ui.overlay_backend: qt | tk` (default `qt`).
-- `app.py` — switch import based on `config["ui"]["overlay_backend"]`.
-- Before starting Q1-2: run P1 + P2 smoke plans on the current Tk
-  build so any regression found during Q1-2 testing can be isolated to
-  the Qt port rather than an older bug.
+**Manual smoke still pending (do before further Q1 work)**:
+- P1 + P2 smoke on the Tk backend first: flip
+  `ui.overlay_backend: tk` in `config.local.yaml`, restart, run the
+  original P1 (10-step) and P2 (mode cycle / voice control) plans.
+  Establishes a regression-free baseline.
+- Q1-2 + Q1-3 smoke on the Qt backend: flip back to `qt`, restart,
+  repeat the same P1+P2 plans. Any failure unique to `qt` is a Q1-2
+  regression. 30-minute soak while dictating to watch for COM / thread
+  issues (H1).
 
-**Remaining execution order**: Q1-2 → Q1-3 → Q1-4 → Q2-4 → Q2-5 →
-Q3-1…Q3-4 → Q4-1 → Q4-2 → Q4-3. (Q1-1, Q2-1, Q2-2, Q2-3 done.)
+**Remaining execution order**: Q1-4 → Q2-4 → Q2-5 → Q3-1…Q3-4 → Q4-1
+→ Q4-2 → Q4-3. (Q1-1, Q1-2, Q1-3, Q2-1, Q2-2, Q2-3 done.)
 
 **Smoke still to run (Q2 shipped tickets)**:
 1. Dictate a segment → tray "Copy last transcription" enabled → clicking
