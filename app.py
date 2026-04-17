@@ -32,7 +32,7 @@ from transcriber import Transcriber
 from postprocessor import build_cloud_system_prompt, ollama_health_check
 from output import (output_text_to_target,
                     save_clipboard, restore_clipboard)
-from recording_indicator import RecordingIndicator
+from recording_indicator_tk import RecordingIndicator
 
 # Logging: console + rotating file (works with both python.exe and pythonw.exe)
 _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"

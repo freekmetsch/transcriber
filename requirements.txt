@@ -13,4 +13,6 @@ soundfile>=0.12.0
 silero-vad>=5.1
 onnxruntime>=1.18
 scipy>=1.11
+PySide6==6.8.*
+PySide6-Frameless-Window>=0.4
 

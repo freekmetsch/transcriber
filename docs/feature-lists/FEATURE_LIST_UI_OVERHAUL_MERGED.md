@@ -1,8 +1,8 @@
 # Feature List: UI + Overlay — Merged Remaining Work
 
 Date: 2026-04-17
-Status: In progress — Q2-1 / Q2-2 / Q2-3 shipped 2026-04-17
-Open phases: Q1 (PySide6 port), Q2-4 (hover-expand, gated on Q1), Q2-5 (tray Session history, gated on Q2-4), Q3, Q4
+Status: In progress — Q1-1, Q2-1 / Q2-2 / Q2-3 shipped 2026-04-17
+Open phases: Q1-2…Q1-4 (PySide6 port body), Q2-4 (hover-expand, gated on Q1), Q2-5 (tray Session history, gated on Q2-4), Q3, Q4
 Scope: All not-yet-shipped features from `FEATURE_LIST_UI_OVERHAUL.md` (2026-04-15)
   and `FEATURE_LIST_OVERLAY_OVERHAUL.md` (2026-04-17)
 Owner: Freek
@@ -339,6 +339,12 @@ counter, Q4 discoverability + VAD tuner. Sustainable order: port first
 to avoid building theming / segment counter twice.
 
 **Current state (updated 2026-04-17 end-of-day)**:
+- Q1-1 scaffolding — `PySide6==6.8.*` + `PySide6-Frameless-Window>=0.4`
+  added to `requirements.txt`; `recording_indicator.py` renamed to
+  `recording_indicator_tk.py` via `git mv`; `app.py` import updated;
+  empty `recording_indicator_qt.py` scaffold with NotImplementedError
+  stubs matching the Tk public API. No `ui.overlay_backend` flag yet
+  (that lands with Q1-2 switch logic).
 - Q2-1 history deque (`HistoryEntry`, `deque(maxlen=ui.history_length)`,
   `_last_transcription` now a property, streaming + batch + `delete that`
   rewired to `_append_history` / `deque.pop`) — shipped.
@@ -353,8 +359,8 @@ to avoid building theming / segment counter twice.
 - `FEATURE_LIST_UI_OVERHAUL.md`: F1, F2, F3, F4, F5, F7, F17, F18, F19,
   F24, F28, F29 (partial), F10, F11 already shipped; F23 partially
   shipped (Copy last added; Session history still pending hover-expand).
-- No PySide6 in requirements. No hover-expand panel. No theming beyond
-  dark palette. No cheat sheet. No VAD tuner.
+- No hover-expand panel. No theming beyond dark palette. No cheat
+  sheet. No VAD tuner.
 
 **Pending verification before `/run` of Q1**:
 - P1 smoke plan (10 steps) from
@@ -363,17 +369,21 @@ to avoid building theming / segment counter twice.
   "stop listening", "delete that", Code mode = `local-raw`).
 
 **First command (next window)**: `/run docs/feature-lists/FEATURE_LIST_UI_OVERHAUL_MERGED.md`
-— resume at Q1-1.
+— resume at Q1-2.
 
-**First files to touch in Q1-1**:
-- `requirements.txt` — add `PySide6==6.8.*`,
-  `PySide6-Frameless-Window>=0.4`.
-- Then rename current `recording_indicator.py` → `recording_indicator_tk.py`.
-- Create `recording_indicator_qt.py`.
-- Add `ui.overlay_backend: qt | tk` in `config.yaml`; default `qt`.
+**First files to touch in Q1-2**:
+- `recording_indicator_qt.py` — replace scaffolded `NotImplementedError`
+  methods with a working Qt pill (PySide6 + qframelesswindow). Match
+  the Tk public API exactly (see `recording_indicator_tk.py` for
+  reference).
+- `config.yaml` — add `ui.overlay_backend: qt | tk` (default `qt`).
+- `app.py` — switch import based on `config["ui"]["overlay_backend"]`.
+- Before starting Q1-2: run P1 + P2 smoke plans on the current Tk
+  build so any regression found during Q1-2 testing can be isolated to
+  the Qt port rather than an older bug.
 
-**Remaining execution order**: Q1-1 → Q1-2 → Q1-3 → Q1-4 → Q2-4 → Q2-5
-→ Q3-1…Q3-4 → Q4-1 → Q4-2 → Q4-3. (Q2-1/Q2-2/Q2-3 done.)
+**Remaining execution order**: Q1-2 → Q1-3 → Q1-4 → Q2-4 → Q2-5 →
+Q3-1…Q3-4 → Q4-1 → Q4-2 → Q4-3. (Q1-1, Q2-1, Q2-2, Q2-3 done.)
 
 **Smoke still to run (Q2 shipped tickets)**:
 1. Dictate a segment → tray "Copy last transcription" enabled → clicking
