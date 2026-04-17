@@ -10,3 +10,7 @@ PyYAML>=6.0
 requests>=2.31.0
 winotify>=1.1.0
 soundfile>=0.12.0
+silero-vad>=5.1
+onnxruntime>=1.18
+scipy>=1.11
+

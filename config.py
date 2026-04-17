@@ -58,6 +58,14 @@ DEFAULT_CONFIG = {
     },
     "streaming": {
         "enabled": True,
+        "vad": {
+            "engine": "silero",
+            "threshold": 0.5,
+            "min_silence_ms": 600,
+            "speech_pad_ms": 120,
+            "preroll_ms": 300,
+        },
+        # EnergyVAD overrides (only used when vad.engine == "energy").
         "silence_threshold": 0.01,
         "silence_duration_ms": 600,
         "min_segment_ms": 500,

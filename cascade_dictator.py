@@ -47,11 +47,16 @@ class CascadeDictator:
         user_mode: Mode | None = None,
     ) -> str:
         raw_output = user_mode is not None and user_mode.output_format == "raw"
+        # StreamingRecorder has already run Silero VAD. A second VAD pass inside
+        # Whisper clips word edges, so disable vad_filter on the streaming path.
+        local_vad_filter = mode != "streaming"
 
         # Raw-output modes (e.g. Code): skip cloud polish + local formatting commands.
         # Goes straight to Whisper and returns the verbatim transcript.
         if raw_output:
-            raw = self._transcriber.transcribe(audio, initial_prompt=initial_prompt)
+            raw = self._transcriber.transcribe(
+                audio, initial_prompt=initial_prompt, vad_filter=local_vad_filter,
+            )
             self.last_language = self._transcriber.last_language
             self.last_language_probability = self._transcriber.last_language_probability
             self.last_path = "local-raw"
@@ -75,7 +80,9 @@ class CascadeDictator:
             except CloudUnavailable:
                 pass  # Fall through to local.
 
-        raw = self._transcriber.transcribe(audio, initial_prompt=initial_prompt)
+        raw = self._transcriber.transcribe(
+            audio, initial_prompt=initial_prompt, vad_filter=local_vad_filter,
+        )
         self.last_language = self._transcriber.last_language
         self.last_language_probability = self._transcriber.last_language_probability
         self.last_path = "local"

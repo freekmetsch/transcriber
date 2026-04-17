@@ -18,7 +18,7 @@ import requests
 
 log = logging.getLogger("transcriber.cloud_dictator")
 
-_CONNECT_TIMEOUT = 0.8
+_CONNECT_TIMEOUT = 1.5
 
 
 class CloudUnavailable(Exception):

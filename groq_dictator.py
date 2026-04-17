@@ -37,8 +37,8 @@ class GroqDictator(_CircuitBreaker, CloudProvider):
         stt_model: str = "whisper-large-v3-turbo",
         polish_model: str = "llama-3.3-70b-versatile",
         base_url: str = "https://api.groq.com/openai/v1",
-        stt_timeout: float = 1.0,
-        polish_timeout: float = 1.2,
+        stt_timeout: float = 3.0,
+        polish_timeout: float = 3.0,
         failure_threshold: int = 3,
         cooldown_s: float = 60.0,
     ):

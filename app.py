@@ -170,18 +170,25 @@ class TranscriberApp:
         self._streaming_enabled = self.config["streaming"]["enabled"]
         if self._streaming_enabled:
             scfg = self.config["streaming"]
+            vcfg = dict(scfg.get("vad") or {})
+            # Energy engine reuses the legacy top-level streaming keys as its
+            # tunables, so old config.local.yaml files still behave.
+            if (vcfg.get("engine") or "silero").lower() == "energy":
+                vcfg.setdefault("threshold", scfg.get("silence_threshold", 0.01))
+                vcfg.setdefault("min_silence_ms", scfg.get("silence_duration_ms", 600))
+            from vad import make_vad
+            vad = make_vad(vcfg)
             self.streaming_recorder = StreamingRecorder(
-                sample_rate=self.config["audio"]["sample_rate"],
+                vad=vad,
                 channels=self.config["audio"]["channels"],
                 device=self.config["audio"].get("device"),
-                silence_threshold=scfg["silence_threshold"],
-                silence_duration_ms=scfg["silence_duration_ms"],
+                target_sample_rate=self.config["audio"]["sample_rate"],
+                preroll_ms=int(vcfg.get("preroll_ms", 300)),
                 min_segment_ms=scfg["min_segment_ms"],
                 max_segment_s=scfg["max_segment_s"],
                 on_level=self._on_audio_level,
             )
-            log.info("Streaming mode enabled (threshold=%.3f, silence=%dms)",
-                     scfg["silence_threshold"], scfg["silence_duration_ms"])
+            log.info("Streaming mode enabled (vad=%s)", type(vad).__name__)
 
         # Streaming session state
         self._segment_context: str = ""

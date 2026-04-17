@@ -26,8 +26,8 @@ whisper:
     # Groq two-call (default):
     stt_model: whisper-large-v3-turbo
     polish_model: llama-3.3-70b-versatile
-    stt_timeout: 1.0                       # STT read timeout (s) before fallback.
-    polish_timeout: 1.2                    # Polish read timeout (s); soft-fails to raw STT.
+    stt_timeout: 3.0                       # STT read timeout (s) before fallback. Set for residential WiFi; drop to 1.0 on LAN if you want faster fallback.
+    polish_timeout: 3.0                    # Polish read timeout (s); soft-fails to raw STT. Drop to 1.2 on LAN.
     # OpenRouter audio-chat alternative (used only when provider: openrouter):
     #   model: openai/gpt-audio
     #   timeout: 2.0
@@ -43,8 +43,15 @@ postprocessing:
 # Streaming mode — VAD-chunked phrase-by-phrase dictation
 streaming:
   enabled: true              # false = batch mode (record all, transcribe at end)
-  silence_threshold: 0.01    # RMS energy threshold for speech detection
-  silence_duration_ms: 700   # Silence gap (ms) before segment boundary; dominates felt latency — raise to 900 if mid-sentence pauses cut early
+  vad:
+    engine: silero           # silero | energy (silero auto-falls-back to energy on load fail)
+    threshold: 0.5           # Silero speech probability (0.5 balanced; raise to 0.6 in noisy rooms)
+    min_silence_ms: 600      # Silence gap before segment end event
+    speech_pad_ms: 120       # Silero pads reported start/end by this
+    preroll_ms: 300          # Pre-speech ring buffer to capture word onsets
+  # EnergyVAD overrides (only consulted when vad.engine: energy)
+  silence_threshold: 0.01
+  silence_duration_ms: 600
   min_segment_ms: 500        # Ignore segments shorter than this (coughs, clicks)
   max_segment_s: 30          # Force-cut very long segments
 
