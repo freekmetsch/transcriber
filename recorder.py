@@ -79,6 +79,17 @@ class Recorder:
         log.info("Captured %.1f seconds of audio", duration)
         return audio
 
+    def cancel(self):
+        """Stop capturing and discard the buffer. Returns nothing."""
+        with self._lock:
+            if self._stream is None:
+                return
+            self._stream.stop()
+            self._stream.close()
+            self._stream = None
+            self._buffer = []
+        log.info("Recording cancelled (buffer discarded)")
+
 
 class StreamingRecorder:
     """Records audio with VAD-based auto-chunking.
@@ -121,6 +132,7 @@ class StreamingRecorder:
         self._queue: queue.Queue[np.ndarray | None] = queue.Queue()
         self._worker: threading.Thread | None = None
         self._on_segment = None
+        self._cancelled = False
 
     def _audio_callback(self, indata, frames, time_info, status):
         if status:
@@ -187,10 +199,10 @@ class StreamingRecorder:
         self._silence_frames = 0
 
     def _worker_loop(self):
-        """Dequeue segments and call on_segment. Exits on None sentinel."""
+        """Dequeue segments and call on_segment. Exits on None sentinel or cancel."""
         while True:
             segment = self._queue.get()
-            if segment is None:
+            if segment is None or self._cancelled:
                 break
             try:
                 self._on_segment(segment)
@@ -210,6 +222,7 @@ class StreamingRecorder:
             self._silence_frames = 0
             self._speech_buffer = []
             self._speech_samples = 0
+            self._cancelled = False
 
             # Drain any stale items from queue
             while not self._queue.empty():
@@ -270,3 +283,33 @@ class StreamingRecorder:
 
             log.info("Streaming recording stopped")
             return remaining
+
+    def cancel(self):
+        """Stop streaming and discard all buffered audio without flushing."""
+        with self._lock:
+            if self._stream is None:
+                return
+            self._cancelled = True
+            self._stream.stop()
+            self._stream.close()
+            self._stream = None
+
+            self._speech_buffer = []
+            self._speech_samples = 0
+            self._in_speech = False
+            self._silence_frames = 0
+
+            # Drain any pending segments so the worker doesn't process them
+            while not self._queue.empty():
+                try:
+                    self._queue.get_nowait()
+                except queue.Empty:
+                    break
+            self._queue.put(None)
+            worker, self._worker = self._worker, None
+
+        # Join outside the lock: the worker calls on_segment → app code, which
+        # may eventually call back into recorder methods that take this lock.
+        if worker is not None:
+            worker.join(timeout=5)
+        log.info("Streaming recording cancelled (audio discarded)")

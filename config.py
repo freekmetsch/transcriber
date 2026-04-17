@@ -69,6 +69,8 @@ DEFAULT_CONFIG = {
         "auto_start": False,
         "show_level_meter": True,
         "show_language": True,
+        "overlay_visible_on_start": True,
+        "toggle_overlay_hotkey": "ctrl+shift+h",
     },
 }
 

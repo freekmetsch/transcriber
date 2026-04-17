@@ -1,9 +1,8 @@
 """Floating recording indicator — Windows+H-style pill bar.
 
-Compact pill bar with drag handle, mic icon, and menu button.
-Features: fade transitions, draggable, position persistence,
-WS_EX_NOACTIVATE (no focus steal), state-based mic color changes,
-floating text popup above bar.
+Always-visible pill with gear menu (left), mic toggle button (center), and
+close X (right). Features: fade transitions, draggable, position persistence,
+WS_EX_NOACTIVATE (no focus steal), state-based mic color, floating text popup.
 """
 
 import ctypes
@@ -12,18 +11,21 @@ import logging
 import threading
 import time
 import tkinter as tk
+from collections.abc import Callable
 from pathlib import Path
 
 log = logging.getLogger("transcriber.recording_indicator")
 
-# Position persistence
 _POS_FILE = Path(__file__).parent / "indicator_pos.json"
 
-# Bar dimensions
 _WIN_W, _WIN_H = 200, 48
-_MENU_ZONE_X = 160  # Clicks right of this open the menu
 
-# Fade alpha steps (120ms total, 24ms per step)
+# Click zones (Canvas x-coordinates)
+_GEAR_X_MAX = 30         # x <= 30 → gear (opens menu)
+_MIC_X_MIN = 50          # 50 <= x <= 130 → mic button (toggle recording)
+_MIC_X_MAX = 130
+_CLOSE_X_MIN = 170       # x >= 170 → close X (dismiss overlay)
+
 _FADE_IN_ALPHAS = (0.0, 0.2, 0.4, 0.6, 0.8, 0.92)
 _FADE_OUT_ALPHAS = (0.92, 0.7, 0.5, 0.3, 0.1, 0.0)
 
@@ -35,6 +37,7 @@ _PULSE_STEPS = [
 
 # State -> mic icon color
 _STATE_COLORS = {
+    "idle":         "#666666",  # Dim grey — default, between sessions
     "listening":    "#e0e0e0",  # White
     "transcribing": "#F39C12",  # Orange
     "processing":   "#4A90D9",  # Blue
@@ -42,39 +45,58 @@ _STATE_COLORS = {
 
 
 class RecordingIndicator:
-    """Always-on-top pill-bar overlay showing recording state.
+    """Always-visible pill-bar overlay. Thread-safe public API.
 
-    Runs on its own Tk thread. Thread-safe: call show()/hide()/set_state()/show_text()
-    from any thread.
+    States:
+      idle         — default; dim mic, no level bar, no timer
+      listening    — recording; white mic, live level bar, elapsed timer
+      transcribing — working on an utterance; pulsing orange mic
+      processing   — post-processing; blue mic
+
+    The pill stays visible from start() until dismiss() is called. end_session()
+    transitions to idle but does NOT hide the window.
     """
 
-    def __init__(self, on_stop=None):
-        self._on_stop = on_stop
+    def __init__(
+        self,
+        on_mic_click: Callable[[], None] | None = None,
+        on_dismiss: Callable[[], None] | None = None,
+        get_menu_items: Callable[[], list] | None = None,
+        visible_on_start: bool = True,
+    ):
+        self._on_mic_click = on_mic_click
+        self._on_dismiss_notify = on_dismiss
+        self._get_menu_items = get_menu_items
+        self._visible_on_start = visible_on_start
+        self._dismissed = not visible_on_start
+
         self._root: tk.Tk | None = None
         self._canvas: tk.Canvas | None = None
         self._mic_items: list[int] = []
-        self._pulse_active: bool = False
+        self._pulse_active = False
         self._pulse_id: str | None = None
-        self._pulse_step: int = 0
+        self._pulse_step = 0
         self._fade_id: str | None = None
-        self._fading: bool = False
+        self._fading = False
         self._thread: threading.Thread | None = None
         self._ready = threading.Event()
-        self._current_state: str = "listening"
-        # Drag
+        self._current_state = "idle"
+
         self._drag_data: dict | None = None
-        # Text popup
+
         self._text_window: tk.Toplevel | None = None
         self._text_canvas: tk.Canvas | None = None
         self._text_item: int | None = None
         self._text_badge_item: int | None = None
         self._text_fade_id: str | None = None
-        self._text_popup_w: int = 360
-        # Level bar + elapsed timer
+        self._text_popup_w = 360
+
         self._level_bar: int | None = None
         self._timer_item: int | None = None
-        self._timer_start: float = 0.0
+        self._timer_start = 0.0
         self._timer_id: str | None = None
+        self._gear_item: int | None = None
+        self._close_item: int | None = None
 
     def start(self):
         """Start the Tk thread. Call once during app init."""
@@ -85,7 +107,6 @@ class RecordingIndicator:
     # --- Position persistence ---
 
     def _load_position(self) -> tuple[int, int] | None:
-        """Load saved bar position from file."""
         try:
             if _POS_FILE.exists():
                 data = json.loads(_POS_FILE.read_text(encoding="utf-8"))
@@ -95,7 +116,6 @@ class RecordingIndicator:
         return None
 
     def _save_position(self):
-        """Save current bar position to file (called on drag-end only)."""
         if self._root is None:
             return
         try:
@@ -109,7 +129,7 @@ class RecordingIndicator:
     # --- Tk setup ---
 
     def _run_tk(self):
-        key_color = "#ff00ff"  # Transparent key — invisible corners for pill shape
+        key_color = "#ff00ff"
         bar_bg = "#1e1e1e"
 
         self._root = tk.Tk()
@@ -119,7 +139,6 @@ class RecordingIndicator:
         self._root.attributes("-transparentcolor", key_color)
         self._root.configure(bg=key_color)
 
-        # Position: saved or bottom-center, 60px from bottom edge
         saved = self._load_position()
         if saved:
             x, y = saved
@@ -136,56 +155,62 @@ class RecordingIndicator:
         )
         self._canvas.pack()
 
-        # Pill-shaped background (overlapping ovals + rectangle)
         self._draw_pill(self._canvas, 0, 0, _WIN_W, _WIN_H, _WIN_H // 2, bar_bg)
 
-        # Drag handle: 3 thin vertical gray lines (left zone)
-        for i in range(3):
-            lx = 16 + i * 5
-            self._canvas.create_line(lx, 16, lx, 32, fill="#555555", width=1.5)
+        # Gear glyph (left) — opens popup menu
+        self._gear_item = self._canvas.create_text(
+            18, _WIN_H // 2,
+            text="\u2699", fill="#888888",
+            font=("Segoe UI Symbol", 12), anchor="center",
+        )
 
         # Microphone icon (center)
         cx = _WIN_W // 2
-        self._draw_mic(cx, _WIN_H // 2, _STATE_COLORS["listening"])
+        self._draw_mic(cx, _WIN_H // 2, _STATE_COLORS["idle"])
 
         # Level bar below mic (hidden until update_level fires)
         self._level_bar = self._canvas.create_rectangle(
             cx, 42, cx, 45,
-            fill=_STATE_COLORS["listening"], outline="",
+            fill=_STATE_COLORS["idle"], outline="",
         )
 
-        # Elapsed timer between mic and menu dots
+        # Elapsed timer between mic and close
         self._timer_item = self._canvas.create_text(
-            145, _WIN_H // 2,
+            150, _WIN_H // 2,
             text="", fill="#888888",
             font=("Segoe UI", 9), anchor="center",
         )
 
-        # Menu dots (right zone)
-        self._canvas.create_text(
-            _WIN_W - 24, _WIN_H // 2,
-            text="\u2022\u2022\u2022", fill="#888888",
-            font=("Segoe UI", 11), anchor="center",
+        # Close X (right) — dismisses the overlay
+        self._close_item = self._canvas.create_text(
+            _WIN_W - 16, _WIN_H // 2,
+            text="\u2715", fill="#888888",
+            font=("Segoe UI", 11, "bold"), anchor="center",
         )
 
-        # Mouse bindings
         self._canvas.bind("<ButtonPress-1>", self._on_press)
         self._canvas.bind("<B1-Motion>", self._on_drag)
         self._canvas.bind("<ButtonRelease-1>", self._on_release)
+        self._canvas.bind("<Enter>", self._on_hover_enter)
+        self._canvas.bind("<Leave>", self._on_hover_leave)
 
-        # Text popup (separate toplevel, hidden by default)
         self._init_text_popup(key_color)
 
-        # Prevent focus stealing on both windows
         self._set_no_activate(self._root)
         self._root.after(100, lambda: self._set_no_activate(self._text_window))
 
-        self._root.withdraw()
+        if self._visible_on_start:
+            self._root.attributes("-alpha", 0.0)
+            self._root.deiconify()
+            self._fading = True
+            self._fade_in_step(0)
+        else:
+            self._root.withdraw()
+
         self._ready.set()
         self._root.mainloop()
 
     def _init_text_popup(self, key_color):
-        """Create the floating text popup window (appears above the bar)."""
         tp_w, tp_h = self._text_popup_w, 32
         self._text_window = tk.Toplevel(self._root)
         self._text_window.overrideredirect(True)
@@ -216,34 +241,26 @@ class RecordingIndicator:
 
     @staticmethod
     def _draw_pill(canvas, x1, y1, x2, y2, r, fill):
-        """Draw a pill (rounded rectangle) using overlapping ovals + rectangle."""
         canvas.create_oval(x1, y1, x1 + 2 * r, y2, fill=fill, outline="")
         canvas.create_oval(x2 - 2 * r, y1, x2, y2, fill=fill, outline="")
         canvas.create_rectangle(x1 + r, y1, x2 - r, y2, fill=fill, outline="")
 
     def _draw_mic(self, cx, cy, color):
-        """Draw a microphone icon at (cx, cy). Stores item IDs for recoloring."""
         self._mic_items = []
         c = self._canvas
-        # Capsule top (oval)
         self._mic_items.append(
             c.create_oval(cx - 5, cy - 14, cx + 5, cy - 2, fill=color, outline=""))
-        # Capsule body (rect fills the oval gap)
         self._mic_items.append(
             c.create_rectangle(cx - 5, cy - 10, cx + 5, cy - 2, fill=color, outline=""))
-        # Cradle (U-shape arc below capsule)
         self._mic_items.append(
             c.create_arc(cx - 9, cy - 10, cx + 9, cy + 6,
                          start=180, extent=180, style="arc", outline=color, width=2))
-        # Stem (vertical line)
         self._mic_items.append(
             c.create_line(cx, cy + 6, cx, cy + 12, fill=color, width=2))
-        # Base (horizontal line)
         self._mic_items.append(
             c.create_line(cx - 6, cy + 12, cx + 6, cy + 12, fill=color, width=2))
 
     def _recolor_mic(self, color):
-        """Change the mic icon to a new color."""
         for item_id in self._mic_items:
             itype = self._canvas.type(item_id)
             if itype == "arc":
@@ -253,17 +270,33 @@ class RecordingIndicator:
             else:
                 self._canvas.itemconfig(item_id, fill=color)
 
-    # --- Mouse handling (drag + menu) ---
+    # --- Mouse handling ---
 
     def _on_press(self, event):
-        if event.x > _MENU_ZONE_X:
+        # Gear (left) → menu
+        if event.x <= _GEAR_X_MAX:
             self._drag_data = None
             self._show_menu()
-        else:
-            self._drag_data = {
-                "ox": event.x_root - self._root.winfo_x(),
-                "oy": event.y_root - self._root.winfo_y(),
-            }
+            return
+        # Close X (right) → dismiss
+        if event.x >= _CLOSE_X_MIN:
+            self._drag_data = None
+            self._do_dismiss(notify=True)
+            return
+        # Mic zone (center) → toggle recording
+        if _MIC_X_MIN <= event.x <= _MIC_X_MAX:
+            self._drag_data = None
+            if self._on_mic_click is not None:
+                try:
+                    self._on_mic_click()
+                except Exception:
+                    log.exception("on_mic_click callback failed")
+            return
+        # Anywhere else → drag
+        self._drag_data = {
+            "ox": event.x_root - self._root.winfo_x(),
+            "oy": event.y_root - self._root.winfo_y(),
+        }
 
     def _on_drag(self, event):
         if self._drag_data is None:
@@ -277,31 +310,54 @@ class RecordingIndicator:
             self._drag_data = None
             self._save_position()
 
+    def _on_hover_enter(self, event):
+        if self._gear_item is not None:
+            self._canvas.itemconfig(self._gear_item, fill="#cccccc")
+        if self._close_item is not None:
+            self._canvas.itemconfig(self._close_item, fill="#cccccc")
+
+    def _on_hover_leave(self, event):
+        if self._gear_item is not None:
+            self._canvas.itemconfig(self._gear_item, fill="#888888")
+        if self._close_item is not None:
+            self._canvas.itemconfig(self._close_item, fill="#888888")
+
     def _show_menu(self):
+        items: list = []
+        if self._get_menu_items is not None:
+            try:
+                items = self._get_menu_items() or []
+            except Exception:
+                log.exception("get_menu_items raised")
+                items = []
+
         menu = tk.Menu(
             self._root, tearoff=0,
             bg="#2a2a2a", fg="#e0e0e0",
             activebackground="#444444", activeforeground="#ffffff",
             font=("Segoe UI", 10),
         )
-        menu.add_command(label="Stop", command=self._on_stop_click)
+        for entry in items:
+            if entry is None:
+                menu.add_separator()
+                continue
+            label, callback = entry
+            if callback is None:
+                menu.add_command(label=label, state="disabled")
+            else:
+                menu.add_command(label=label, command=callback)
         try:
             menu.tk_popup(
-                self._root.winfo_x() + _WIN_W - 10,
-                self._root.winfo_y() - 5,
+                self._root.winfo_x() + 10,
+                self._root.winfo_y() + _WIN_H + 4,
             )
         finally:
             menu.grab_release()
-
-    def _on_stop_click(self):
-        if self._on_stop:
-            self._on_stop()
 
     # --- WS_EX_NOACTIVATE ---
 
     @staticmethod
     def _set_no_activate(window):
-        """Prevent a window from stealing focus when clicked."""
         try:
             hwnd = ctypes.windll.user32.GetParent(window.winfo_id())
             GWL_EXSTYLE = -20
@@ -322,26 +378,28 @@ class RecordingIndicator:
             self._fade_id = self._root.after(24, lambda: self._fade_in_step(step + 1))
         else:
             self._fading = False
+            self._fade_id = None
 
-    def _fade_out_step(self, step):
+    def _fade_out_step(self, step, on_done=None):
         if self._root is None:
             return
         if step < len(_FADE_OUT_ALPHAS):
             self._root.attributes("-alpha", _FADE_OUT_ALPHAS[step])
             if step < len(_FADE_OUT_ALPHAS) - 1:
-                self._fade_id = self._root.after(24, lambda: self._fade_out_step(step + 1))
+                self._fade_id = self._root.after(
+                    24, lambda: self._fade_out_step(step + 1, on_done))
             else:
                 self._fade_id = None
                 self._fading = False
-                self._root.withdraw()
-                self._root.attributes("-alpha", 0.92)  # Reset for next show
-        else:
-            self._fading = False
+                if on_done is not None:
+                    on_done()
 
     def _cancel_fade(self):
-        """Cancel any in-progress fade animation."""
-        if self._fade_id is not None:
-            self._root.after_cancel(self._fade_id)
+        if self._fade_id is not None and self._root is not None:
+            try:
+                self._root.after_cancel(self._fade_id)
+            except Exception:
+                pass
             self._fade_id = None
         self._fading = False
 
@@ -363,14 +421,16 @@ class RecordingIndicator:
 
     def _stop_pulse(self):
         self._pulse_active = False
-        if self._pulse_id is not None:
-            self._root.after_cancel(self._pulse_id)
+        if self._pulse_id is not None and self._root is not None:
+            try:
+                self._root.after_cancel(self._pulse_id)
+            except Exception:
+                pass
             self._pulse_id = None
 
     # --- Text popup positioning ---
 
     def _position_text_popup(self):
-        """Position the text popup centered above the bar."""
         bar_x = self._root.winfo_x()
         bar_y = self._root.winfo_y()
         tp_x = bar_x + (_WIN_W - self._text_popup_w) // 2
@@ -379,44 +439,103 @@ class RecordingIndicator:
 
     # --- Public API (all thread-safe) ---
 
-    def show(self):
-        """Show the indicator (recording started). Thread-safe."""
+    def begin_session(self):
+        """Transition to listening state. Restores if dismissed. Thread-safe."""
         if self._root:
-            self._root.after(0, self._do_show)
+            self._root.after(0, self._do_begin_session)
 
-    def _do_show(self):
+    def _do_begin_session(self):
+        if self._dismissed:
+            self._do_restore()
         self._cancel_fade()
         self._current_state = "listening"
         self._stop_pulse()
         self._recolor_mic(_STATE_COLORS["listening"])
         self._reset_level_bar()
         self._start_timer()
+
+    def end_session(self):
+        """Transition to idle. Window stays visible. Thread-safe."""
+        if self._root:
+            self._root.after(0, self._do_end_session)
+
+    def _do_end_session(self):
+        self._stop_pulse()
+        self._cancel_timer()
+        self._reset_level_bar()
+        if self._text_fade_id is not None:
+            try:
+                self._root.after_cancel(self._text_fade_id)
+            except Exception:
+                pass
+            self._text_fade_id = None
+        if self._text_window:
+            self._text_window.withdraw()
+        self._current_state = "idle"
+        self._recolor_mic(_STATE_COLORS["idle"])
+
+    def dismiss(self):
+        """Fade out and withdraw the overlay window. Thread-safe."""
+        if self._root:
+            self._root.after(0, lambda: self._do_dismiss(notify=True))
+
+    def _do_dismiss(self, notify: bool = True):
+        if self._dismissed:
+            return
+        self._dismissed = True
+        self._stop_pulse()
+        self._cancel_timer()
+        if self._text_window:
+            self._text_window.withdraw()
+        self._cancel_fade()
+        self._fading = True
+        self._fade_out_step(0, on_done=self._finish_dismiss)
+        if notify and self._on_dismiss_notify is not None:
+            try:
+                self._on_dismiss_notify()
+            except Exception:
+                log.exception("on_dismiss callback failed")
+
+    def _finish_dismiss(self):
+        if self._root:
+            self._root.withdraw()
+            self._root.attributes("-alpha", 0.92)
+
+    def restore(self):
+        """Deiconify and fade in the overlay. Thread-safe."""
+        if self._root:
+            self._root.after(0, self._do_restore)
+
+    def _do_restore(self):
+        if not self._dismissed:
+            return
+        self._dismissed = False
+        self._cancel_fade()
+        self._current_state = "idle"
+        self._recolor_mic(_STATE_COLORS["idle"])
+        self._reset_level_bar()
         self._root.attributes("-alpha", 0.0)
         self._root.deiconify()
         self._root.lift()
         self._fading = True
         self._fade_in_step(0)
 
-    def hide(self):
-        """Hide the indicator (recording stopped). Thread-safe."""
+    def toggle_visibility(self):
+        """Toggle dismissed state. Thread-safe. Used by overlay-toggle hotkey."""
         if self._root:
-            self._root.after(0, self._do_hide)
+            self._root.after(0, self._do_toggle_visibility)
 
-    def _do_hide(self):
-        self._stop_pulse()
-        self._cancel_timer()
-        self._reset_level_bar()
-        if self._text_fade_id is not None:
-            self._root.after_cancel(self._text_fade_id)
-            self._text_fade_id = None
-        if self._text_window:
-            self._text_window.withdraw()
-        self._cancel_fade()
-        self._fading = True
-        self._fade_out_step(0)
+    def _do_toggle_visibility(self):
+        if self._dismissed:
+            self._do_restore()
+        else:
+            self._do_dismiss(notify=False)
+
+    def is_dismissed(self) -> bool:
+        return self._dismissed
 
     def set_state(self, state: str):
-        """Set display state: 'listening', 'transcribing', or 'processing'. Thread-safe."""
+        """Set display state: idle | listening | transcribing | processing. Thread-safe."""
         if self._root and state in _STATE_COLORS:
             self._root.after(0, lambda: self._do_set_state(state))
 
@@ -427,21 +546,22 @@ class RecordingIndicator:
         self._recolor_mic(_STATE_COLORS[state])
         if state == "transcribing":
             self._start_pulse()
-        elif state == "listening" and prev != "listening":
+        elif state in ("listening", "idle") and prev != state:
             self._reset_level_bar()
 
     def show_text(self, text: str, language: str = "", confidence: float = 1.0):
-        """Show transcribed text as popup above bar (auto-fades after 3s). Thread-safe.
-
-        If `language` is provided, prepends a small colored badge (EN/NL) with color
-        keyed to `confidence`: green >0.8, yellow 0.5-0.8, orange <0.5.
-        """
+        """Show transcribed text as popup above bar (auto-fades after 3s). Thread-safe."""
         if self._root:
             self._root.after(0, lambda: self._do_show_text(text, language, confidence))
 
     def _do_show_text(self, text: str, language: str = "", confidence: float = 1.0):
+        if self._dismissed:
+            return
         if self._text_fade_id is not None:
-            self._root.after_cancel(self._text_fade_id)
+            try:
+                self._root.after_cancel(self._text_fade_id)
+            except Exception:
+                pass
         display = text if len(text) <= 60 else text[:57] + "\u2026"
         self._text_canvas.itemconfig(self._text_item, text=display)
         if language:
@@ -472,19 +592,14 @@ class RecordingIndicator:
 
     def update_level(self, rms: float):
         """Update the mic level bar. Thread-safe."""
-        # Gate at the audio-callback thread: while not listening the bar is frozen
-        # anyway, so skip scheduling a Tk round-trip (~10-15 Hz from mic callback).
         if self._root and self._current_state == "listening":
-            self._root.after(0, lambda: self._do_update_level(rms))
+            self._root.after(0, self._do_update_level, rms)
 
     def _do_update_level(self, rms: float):
         if self._level_bar is None or self._canvas is None:
             return
-        # Bar motion means "mic is live and hearing you right now." Freeze while
-        # transcribing/processing so state color alone signals the working phase.
         if self._current_state != "listening":
             return
-        # Normalize: speech typically peaks around 0.05 RMS on 16 kHz mono float32.
         width = min(max(rms, 0.0) / 0.05, 1.0) * 50.0
         cx = _WIN_W // 2
         half = width / 2.0
@@ -517,18 +632,17 @@ class RecordingIndicator:
         self._timer_id = self._root.after(1000, self._update_timer)
 
     def _cancel_timer(self):
-        if self._timer_id is not None:
-            self._root.after_cancel(self._timer_id)
+        if self._timer_id is not None and self._root is not None:
+            try:
+                self._root.after_cancel(self._timer_id)
+            except Exception:
+                pass
             self._timer_id = None
         if self._timer_item is not None and self._canvas is not None:
             self._canvas.itemconfig(self._timer_item, text="")
 
     def show_feedback(self, feedback_type: str = "success"):
-        """Flash the mic icon briefly to confirm an event. Thread-safe.
-
-        Types: 'success' (green), 'warning' (yellow), 'error' (red).
-        Works even if the indicator is currently hidden (shows briefly then hides).
-        """
+        """Flash the mic icon briefly. Works even when dismissed. Thread-safe."""
         if self._root:
             self._root.after(0, lambda: self._do_show_feedback(feedback_type))
 
@@ -539,22 +653,19 @@ class RecordingIndicator:
             "error": "#E74C3C",
         }
         color = colors.get(feedback_type, "#2ECC71")
-        was_hidden = not self._root.winfo_viewable()
+        was_dismissed = self._dismissed
 
-        if was_hidden:
-            self._cancel_fade()
-            self._root.attributes("-alpha", 0.92)
-            self._root.deiconify()
-            self._root.lift()
+        if was_dismissed:
+            self._do_restore()
 
         self._stop_pulse()
         self._recolor_mic(color)
 
         def _revert():
-            if was_hidden:
-                self._root.withdraw()
+            if was_dismissed:
+                self._do_dismiss(notify=False)
             else:
-                state_color = _STATE_COLORS.get(self._current_state, "#e0e0e0")
+                state_color = _STATE_COLORS.get(self._current_state, _STATE_COLORS["idle"])
                 self._recolor_mic(state_color)
                 if self._current_state == "transcribing":
                     self._start_pulse()

@@ -47,20 +47,38 @@ except PermissionError:
 log = logging.getLogger("transcriber")
 
 
-def _build_icon_image(recording: bool = False) -> Image.Image:
-    """Create a simple mic icon — blue when idle, red when recording."""
+_TRAY_STATE_COLORS = {
+    "idle":         "#4A90D9",  # Blue
+    "listening":    "#E74C3C",  # Red
+    "transcribing": "#F39C12",  # Orange
+    "blocked":      "#777777",  # Grey
+}
+
+# Per-state tooltip titles. idle=None → use composed _tray_tooltip().
+_TRAY_STATE_TITLES = {
+    "idle":         None,
+    "listening":    "Transcriber — Recording...",
+    "transcribing": "Transcriber — Transcribing...",
+    "blocked":      "Transcriber — No text field detected",
+}
+
+
+def _build_icon_image(state: str = "idle") -> Image.Image:
+    """Create a mic icon colored per state. Blocked state overlays a red X."""
+    color = _TRAY_STATE_COLORS.get(state, _TRAY_STATE_COLORS["idle"])
     image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    color = "#E74C3C" if recording else "#4A90D9"
     draw.ellipse([16, 8, 48, 40], fill=color)
     draw.rectangle([28, 40, 36, 52], fill=color)
     draw.rectangle([20, 52, 44, 56], fill=color)
+    if state == "blocked":
+        draw.line([14, 14, 50, 50], fill="#FF4444", width=6)
+        draw.line([50, 14, 14, 50], fill="#FF4444", width=6)
     return image
 
 
-# Pre-build both icon states once at import time
-_ICON_IDLE = _build_icon_image(False)
-_ICON_RECORDING = _build_icon_image(True)
+# Pre-build all tray icon states once at import time
+_ICON_STATES = {state: _build_icon_image(state) for state in _TRAY_STATE_COLORS}
 
 
 class TranscriberApp:
@@ -164,8 +182,14 @@ class TranscriberApp:
         self._vocabulary_text: str = ""
         self._last_transcription: str = ""
 
-        # Recording indicator (Win+H-style overlay)
-        self._recording_indicator = RecordingIndicator(on_stop=self._toggle_recording)
+        # Always-visible overlay (Win+H-style)
+        self._overlay_close_toast_shown = False
+        self._recording_indicator = RecordingIndicator(
+            on_mic_click=self._toggle_recording,
+            on_dismiss=self._on_overlay_dismiss,
+            get_menu_items=self._build_overlay_menu_items,
+            visible_on_start=self.config["ui"].get("overlay_visible_on_start", True),
+        )
         self._recording_indicator.start()
 
         # Sound feedback
@@ -300,12 +324,25 @@ class TranscriberApp:
         if self._vocab_manager:
             self._vocab_manager.schedule_show()
 
-    def _update_icon(self, recording: bool):
-        if self._icon is not None:
-            self._icon.icon = _ICON_RECORDING if recording else _ICON_IDLE
-            self._icon.title = (
-                "Transcriber — Recording..." if recording else self._tray_tooltip()
-            )
+    def _set_tray_state(self, state: str):
+        """Update tray icon glyph + tooltip for a given state.
+
+        State values: idle | listening | transcribing | blocked.
+        """
+        if self._icon is None:
+            return
+        self._icon.icon = _ICON_STATES.get(state, _ICON_STATES["idle"])
+        title = _TRAY_STATE_TITLES.get(state)
+        self._icon.title = title if title is not None else self._tray_tooltip()
+
+    def _set_state(self, state: str):
+        """Sync overlay + tray to the same state (idle | listening | transcribing)."""
+        self._recording_indicator.set_state(state)
+        self._set_tray_state(state)
+
+    def _return_to_idle(self):
+        """End the overlay session and reset the tray to idle."""
+        self._return_to_idle()
 
     def _tray_tooltip(self) -> str:
         """Build tray icon tooltip with hotkey hint, vocab count, and last action."""
@@ -316,6 +353,38 @@ class TranscriberApp:
         if self._last_action_status:
             base += f"\n{self._last_action_status}"
         return base
+
+    def _on_overlay_dismiss(self):
+        """Called when user clicks X on the overlay. Shows a hint toast once per session."""
+        if not self._overlay_close_toast_shown:
+            self._overlay_close_toast_shown = True
+            toggle_hk = self.config["ui"].get("toggle_overlay_hotkey", "ctrl+shift+h")
+            notifications.notify_info(
+                "Overlay hidden",
+                f"Press {toggle_hk} or use the tray menu to show it again",
+            )
+
+    def _build_overlay_menu_items(self) -> list:
+        """Build the overlay gear menu (mirrors tray menu, minus shortcut duplication)."""
+        items: list = [
+            ("Hide overlay", self._recording_indicator.dismiss),
+            None,
+        ]
+        if self._brain is not None:
+            items.extend([
+                ("Manage vocabulary", self._open_vocab_manager),
+                ("Export vocabulary", self._export_vocabulary),
+                ("Import vocabulary", self._import_vocabulary),
+                None,
+            ])
+        autostart_label = ("Start with Windows  \u2713" if autostart.is_enabled()
+                           else "Start with Windows")
+        items.extend([
+            (autostart_label, autostart.toggle),
+            None,
+            ("Quit", self._quit),
+        ])
+        return items
 
     def _toggle_recording(self):
         # Debounce: keyboard library fires repeatedly while keys are held
@@ -329,11 +398,11 @@ class TranscriberApp:
                 self._recording = False
                 sounds.play_stop()
                 log.info("Recording stopped (toggle)")
-                self._update_icon(False)
+                self._set_tray_state("transcribing")
                 if self._streaming_enabled:
                     threading.Thread(target=self._stop_streaming, daemon=True).start()
                 else:
-                    # Keep indicator visible during transcription — hide after output
+                    # Keep indicator visible during transcription — returns to idle after output
                     self._recording_indicator.set_state("transcribing")
                     threading.Thread(target=self._stop_and_transcribe, daemon=True).start()
             else:
@@ -344,18 +413,18 @@ class TranscriberApp:
                     sounds.play_error()
                     notifications.notify_guard_blocked(class_name)
                     self._last_action_status = f"Blocked: {class_name}"
-                    self._update_icon(False)
+                    self._set_tray_state("blocked")
                     return
 
                 self._target_hwnd = hwnd
                 self._recording = True
                 sounds.play_start()
                 log.info("Recording started — target: %s (hwnd=%d)", class_name, hwnd)
-                self._update_icon(True)
+                self._set_tray_state("listening")
                 if self._streaming_enabled:
                     self._start_streaming()
                 else:
-                    self._recording_indicator.show()
+                    self._recording_indicator.begin_session()
                     self.recorder.start()
 
     # --- Streaming pipeline ---
@@ -368,7 +437,7 @@ class TranscriberApp:
             self._clipboard_original = save_clipboard()
         else:
             self._clipboard_original = None
-        self._recording_indicator.show()
+        self._recording_indicator.begin_session()
         self.streaming_recorder.start(on_segment=self._on_speech_segment)
 
     def _on_audio_level(self, rms: float):
@@ -383,7 +452,10 @@ class TranscriberApp:
         Cloud path: OpenRouter audio-chat returns already-formatted text.
         Local path: Whisper + apply_formatting_commands.
         """
-        self._recording_indicator.set_state("transcribing")
+        if not self._recording:
+            # Session was cancelled while this segment was in flight — drop it.
+            return
+        self._set_state("transcribing")
         t_start = time.monotonic()
 
         try:
@@ -400,11 +472,11 @@ class TranscriberApp:
         except Exception:
             log.exception("Segment dictation failed")
             sounds.play_error()
-            self._recording_indicator.set_state("listening")
+            self._set_state("listening")
             return
 
         if not result:
-            self._recording_indicator.set_state("listening")
+            self._set_state("listening")
             return
 
         t_total = time.monotonic() - t_start
@@ -412,6 +484,10 @@ class TranscriberApp:
             "Segment timing: dictate=%.2fs (%s), total=%.2fs",
             t_dictate, self.dictator.last_path, t_total,
         )
+
+        if not self._recording:
+            # Cancelled while we were transcribing — don't paste.
+            return
 
         if self._segment_context:
             result = " " + result
@@ -423,7 +499,7 @@ class TranscriberApp:
         self._segment_context = result.strip()
         self._last_transcription = result.strip()
         self._last_action_status = f"Dictated: {result.strip()[:40]}"
-        self._recording_indicator.set_state("listening")
+        self._set_state("listening")
         if self.config["ui"]["show_language"]:
             self._recording_indicator.show_text(
                 result.strip(),
@@ -442,7 +518,7 @@ class TranscriberApp:
         if remaining is not None and len(remaining) > 0:
             self._on_speech_segment(remaining)
 
-        self._recording_indicator.hide()
+        self._return_to_idle()
         if self._clipboard_original is not None:
             restore_clipboard(self._clipboard_original)
             self._clipboard_original = None
@@ -457,7 +533,8 @@ class TranscriberApp:
         if audio is None or len(audio) == 0:
             log.warning("No audio captured")
             sounds.play_error()
-            self._recording_indicator.hide()
+            self._recording_indicator.end_session()
+            self._set_tray_state("idle")
             return
         try:
             self._recording_indicator.set_state("processing")
@@ -486,23 +563,44 @@ class TranscriberApp:
 
                 self._recording_indicator.show_feedback("success")
                 time.sleep(0.4)
-                self._recording_indicator.hide()
+                self._recording_indicator.end_session()
+                self._set_tray_state("idle")
 
                 self._show_correction_auto(result)
             else:
                 log.warning("Dictation returned empty text")
                 sounds.play_error()
-                self._recording_indicator.hide()
+                self._recording_indicator.end_session()
+                self._set_tray_state("idle")
         except Exception:
             log.exception("Dictation failed")
             sounds.play_error()
             notifications.notify_error("Dictation failed", "Check microphone and try again")
-            self._recording_indicator.hide()
+            self._recording_indicator.end_session()
+            self._set_tray_state("idle")
 
     def _register_hotkey(self):
         hotkey = self.config["hotkey"]
         keyboard.add_hotkey(hotkey, self._toggle_recording, suppress=True)
         log.info("Hotkey registered: %s (toggle)", hotkey)
+
+        # Overlay show/hide toggle (Ctrl+Shift+H by default)
+        toggle_hk = self.config["ui"].get("toggle_overlay_hotkey", "ctrl+shift+h")
+        if toggle_hk:
+            try:
+                keyboard.add_hotkey(
+                    toggle_hk, self._recording_indicator.toggle_visibility, suppress=True,
+                )
+                log.info("Overlay toggle hotkey registered: %s", toggle_hk)
+            except Exception:
+                log.exception("Failed to register overlay toggle hotkey %s", toggle_hk)
+
+        # Esc cancels recording in-flight — suppress=False so Esc also reaches target apps
+        try:
+            keyboard.add_hotkey("esc", self._on_esc, suppress=False)
+            log.info("Cancel hotkey registered: esc (observes only, does not suppress)")
+        except Exception:
+            log.exception("Failed to register Esc cancel hotkey")
 
         # Register correction hotkey if brain is enabled and mode is not "off"
         if self._brain is not None:
@@ -513,7 +611,36 @@ class TranscriberApp:
                 keyboard.add_hotkey(corr_hotkey, self._open_correction_window, suppress=True)
                 log.info("Correction hotkey registered: %s", corr_hotkey)
 
-    def _export_vocabulary(self, icon, item):
+    def _on_esc(self):
+        """Esc handler: cancel if recording, otherwise no-op (passes through)."""
+        if self._recording:
+            self._cancel_recording()
+
+    def _cancel_recording(self):
+        """Cancel in-flight recording: discard buffer, no paste, return to idle."""
+        with self._lock:
+            if not self._recording:
+                return
+            self._recording = False
+        sounds.play_error()
+        log.info("Recording cancelled (Esc)")
+        if self._streaming_enabled:
+            try:
+                self.streaming_recorder.cancel()
+            except Exception:
+                log.exception("Failed to cancel streaming recorder")
+            if self._clipboard_original is not None:
+                restore_clipboard(self._clipboard_original)
+                self._clipboard_original = None
+        else:
+            try:
+                self.recorder.cancel()
+            except Exception:
+                log.exception("Failed to cancel recorder")
+        self._return_to_idle()
+        self._last_action_status = "Cancelled"
+
+    def _export_vocabulary(self, icon=None, item=None):
         """Export vocabulary to JSON file."""
         if self._brain is None:
             return
@@ -521,7 +648,7 @@ class TranscriberApp:
         self._brain.export_to_file(export_path)
         log.info("Vocabulary exported to %s", export_path)
 
-    def _import_vocabulary(self, icon, item):
+    def _import_vocabulary(self, icon=None, item=None):
         """Import vocabulary from JSON file."""
         if self._brain is None:
             return
@@ -577,6 +704,12 @@ class TranscriberApp:
 
         menu_items.extend([
             pystray.MenuItem(
+                lambda item: "Show overlay" if self._recording_indicator.is_dismissed()
+                             else "Hide overlay",
+                lambda icon, item: self._recording_indicator.toggle_visibility(),
+            ),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem(
                 "Create Desktop Shortcut",
                 self._create_shortcut,
             ),
@@ -609,7 +742,7 @@ class TranscriberApp:
         else:
             notifications.notify_error("Shortcut failed", "Check log for details")
 
-    def _quit(self, icon, item):
+    def _quit(self, icon=None, item=None):
         log.info("Shutting down")
         keyboard.unhook_all()
         self._recording_indicator.destroy()
@@ -617,7 +750,9 @@ class TranscriberApp:
             self._correction_ui.destroy()
         if self._brain:
             self._brain.close()
-        icon.stop()
+        target = icon if icon is not None else self._icon
+        if target is not None:
+            target.stop()
 
     def run(self):
         log.info("Starting Transcriber")
@@ -655,7 +790,7 @@ class TranscriberApp:
 
         menu = self._build_tray_menu()
         self._icon = pystray.Icon(
-            "transcriber", _ICON_IDLE, self._tray_tooltip(), menu
+            "transcriber", _ICON_STATES["idle"], self._tray_tooltip(), menu
         )
 
         brain_status = ""
