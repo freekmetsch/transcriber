@@ -67,7 +67,14 @@ class RecordingIndicator:
         visible_on_start: bool = True,
         get_mode_name: Callable[[], str] | None = None,
         on_mode_click: Callable[[], None] | None = None,
+        get_history_entries: Callable[[], list] | None = None,
+        get_history_hover_enabled: Callable[[], bool] | None = None,
+        on_history_repaste: Callable[[object], None] | None = None,
+        on_history_discard: Callable[[object], None] | None = None,
     ):
+        # Hover-expand history is Qt-only; kwargs accepted for API parity.
+        del get_history_entries, get_history_hover_enabled
+        del on_history_repaste, on_history_discard
         self._on_mic_click = on_mic_click
         self._on_dismiss_notify = on_dismiss
         self._get_menu_items = get_menu_items

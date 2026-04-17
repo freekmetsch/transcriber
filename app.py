@@ -212,6 +212,9 @@ class TranscriberApp:
         self._history: deque[HistoryEntry] = deque(
             maxlen=int(self.config["ui"].get("history_length", 10)),
         )
+        self._show_history_on_hover: bool = bool(
+            self.config["ui"].get("show_history_on_hover", False),
+        )
 
         # Always-visible overlay (Win+H-style)
         self._overlay_close_toast_shown = False
@@ -229,6 +232,10 @@ class TranscriberApp:
             visible_on_start=self.config["ui"].get("overlay_visible_on_start", True),
             get_mode_name=lambda: self._modes.current().name,
             on_mode_click=self._cycle_mode,
+            get_history_entries=self._get_history_for_hover,
+            get_history_hover_enabled=lambda: self._show_history_on_hover,
+            on_history_repaste=self._on_history_repaste,
+            on_history_discard=self._on_history_discard,
         )
         self._recording_indicator.start()
 
@@ -448,9 +455,12 @@ class TranscriberApp:
         cycle_label = f"Cycle mode \u2192 {self._modes.current().name}"
         if cycle_hk:
             cycle_label += f"  ({cycle_hk})"
+        hover_label = ("Show history on hover  \u2713" if self._show_history_on_hover
+                       else "Show history on hover")
         items: list = [
             ("Hide overlay", self._recording_indicator.dismiss),
             (cycle_label, self._cycle_mode),
+            (hover_label, self._toggle_history_on_hover),
             None,
         ]
         if self._brain is not None:
@@ -773,19 +783,50 @@ class TranscriberApp:
             sounds.play_error()
             notifications.notify_info("Nothing to re-paste", "History is empty")
             return
+        self._repaste_entry(self._history[-1])
+
+    def _repaste_entry(self, entry: HistoryEntry):
+        """Re-paste a specific history entry into the focused text field."""
         is_viable, class_name, hwnd = focus_guard.check_text_field()
         if not is_viable:
             sounds.play_error()
             notifications.notify_guard_blocked(class_name)
             return
-        text = self._history[-1].text
         method = self.config["ui"]["output_method"]
         try:
-            output_text_to_target(text, hwnd, method=method)
-            log.info("Re-pasted last transcription (%d chars)", len(text))
+            output_text_to_target(entry.text, hwnd, method=method)
+            log.info("Re-pasted history entry (%d chars)", len(entry.text))
         except Exception:
             log.exception("Re-paste failed")
             sounds.play_error()
+
+    def _get_history_for_hover(self) -> list:
+        """Return entries for the hover panel (newest-last, like the deque)."""
+        if not self._show_history_on_hover:
+            return []
+        return list(self._history)
+
+    def _on_history_repaste(self, entry: HistoryEntry):
+        """Hover-panel click — re-paste this entry on a worker thread (Qt-safe)."""
+        threading.Thread(
+            target=self._repaste_entry, args=(entry,), daemon=True,
+        ).start()
+
+    def _on_history_discard(self, entry: HistoryEntry):
+        """Hover-panel right-click — drop this entry from history."""
+        keep = [e for e in self._history if e is not entry]
+        self._history.clear()
+        self._history.extend(keep)
+        log.info("Discarded history entry (%d remain)", len(self._history))
+        self._refresh_tray_menu()
+
+    def _toggle_history_on_hover(self, icon=None, item=None):
+        """Flip the privacy toggle for the hover-expand history panel."""
+        self._show_history_on_hover = not self._show_history_on_hover
+        log.info(
+            "Hover-expand history: %s",
+            "on" if self._show_history_on_hover else "off",
+        )
 
     def _export_vocabulary(self, icon=None, item=None):
         """Export vocabulary to JSON file."""

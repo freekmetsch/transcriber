@@ -79,6 +79,7 @@ ui:
   cycle_mode_hotkey: ctrl+shift+m      # Cycle dictation modes (Default / Email / Code ...)
   repaste_hotkey: ctrl+alt+v           # Re-paste the most recent transcription into the focused text field
   history_length: 10                   # Items kept in the in-memory transcription history (drives Copy last + re-paste)
+  show_history_on_hover: false         # Hover the pill to expand last 3 entries (click=repaste, right-click=discard). Default OFF for privacy.
 
 # Dictation modes — omit or leave null to use built-ins (Default, Email, Code).
 # Schema per entry: { name, polish_prompt_addendum, output_format }.

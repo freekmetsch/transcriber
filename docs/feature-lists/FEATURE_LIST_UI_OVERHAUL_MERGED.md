@@ -1,8 +1,8 @@
 # Feature List: UI + Overlay — Merged Remaining Work
 
 Date: 2026-04-17
-Status: In progress — Q1-1 (re-done after package-name fix), Q1-2, Q1-3, Q2-1 / Q2-2 / Q2-3 shipped 2026-04-17
-Open phases: Q1-4 (hover-expand), Q2-4 (hover-expand wiring, gated on Q1-4), Q2-5 (tray Session history, gated on Q2-4), Q3, Q4
+Status: In progress — Q1-1…Q1-4, Q2-1…Q2-3 shipped 2026-04-17 (Q1-4 lands the hover-expand panel Q2-4 was gated on)
+Open phases: Q2-5 (tray Session history), Q3, Q4
 Scope: All not-yet-shipped features from `FEATURE_LIST_UI_OVERHAUL.md` (2026-04-15)
   and `FEATURE_LIST_OVERLAY_OVERHAUL.md` (2026-04-17)
 Owner: Freek
@@ -366,14 +366,23 @@ to avoid building theming / segment counter twice.
 - Q2-3 re-paste hotkey (`ui.repaste_hotkey`, default `ctrl+alt+v`, routes
   through `focus_guard.check_text_field` + `output_text_to_target`) —
   shipped.
-- `config.yaml` gained `ui.repaste_hotkey`, `ui.history_length`.
+- Q1-4 hover-expand panel (`_HistoryPanel` in `recording_indicator_qt.py`;
+  300 ms open / 200 ms close hysteresis; newest-first rows with
+  timestamp + 60-char truncation; left-click routes through
+  `TranscriberApp._repaste_entry`, right-click calls
+  `_on_history_discard`; gear popover gains "Show history on hover"
+  toggle bound to `ui.show_history_on_hover`, default OFF for privacy).
+  Tk backend accepts the 4 new kwargs as no-ops for API parity —
+  hover-expand is Qt-only by design. Q2-4 is therefore landed as part
+  of Q1-4.
+- `config.yaml` gained `ui.repaste_hotkey`, `ui.history_length`,
+  `ui.show_history_on_hover`.
 - `FEATURE_LIST_OVERLAY_OVERHAUL.md` P1 + P2 in code, smoke still
   pending.
 - `FEATURE_LIST_UI_OVERHAUL.md`: F1, F2, F3, F4, F5, F7, F17, F18, F19,
   F24, F28, F29 (partial), F10, F11 already shipped; F23 partially
   shipped (Copy last added; Session history still pending hover-expand).
-- No hover-expand panel. No theming beyond dark palette. No cheat
-  sheet. No VAD tuner.
+- No theming beyond dark palette. No cheat sheet. No VAD tuner.
 
 **Pending verification before `/run` of Q1**:
 - P1 smoke plan (10 steps) from
@@ -382,7 +391,8 @@ to avoid building theming / segment counter twice.
   "stop listening", "delete that", Code mode = `local-raw`).
 
 **First command (next window)**: `/run docs/feature-lists/FEATURE_LIST_UI_OVERHAUL_MERGED.md`
-— resume at Q1-4 (hover-expand history panel).
+— resume at Q2-5 (tray "Session history…" item that restores + briefly
+opens the hover-expand panel; hidden when `ui.overlay_backend: tk`).
 
 **Manual smoke still pending (do before further Q1 work)**:
 - P1 + P2 smoke on the Tk backend first: flip
@@ -394,8 +404,8 @@ to avoid building theming / segment counter twice.
   regression. 30-minute soak while dictating to watch for COM / thread
   issues (H1).
 
-**Remaining execution order**: Q1-4 → Q2-4 → Q2-5 → Q3-1…Q3-4 → Q4-1
-→ Q4-2 → Q4-3. (Q1-1, Q1-2, Q1-3, Q2-1, Q2-2, Q2-3 done.)
+**Remaining execution order**: Q2-5 → Q3-1…Q3-4 → Q4-1 → Q4-2 → Q4-3.
+(Q1-1…Q1-4, Q2-1…Q2-4 done; Q2-4 folded into Q1-4.)
 
 **Smoke still to run (Q2 shipped tickets)**:
 1. Dictate a segment → tray "Copy last transcription" enabled → clicking

@@ -62,6 +62,13 @@ _TEXT_POPUP_W = 360
 _TEXT_POPUP_H = 32
 _TEXT_POPUP_BG = "#2a2a2a"
 
+_HISTORY_PANEL_W = 340
+_HISTORY_ROW_H = 30
+_HISTORY_PAD = 8
+_HISTORY_MAX_ROWS = 3
+_HISTORY_OPEN_DELAY_MS = 300
+_HISTORY_CLOSE_DELAY_MS = 200
+
 _FADE_DURATION_MS = 140
 _TARGET_OPACITY = 0.92
 _PULSE_PERIOD_MS = 200
@@ -134,6 +141,16 @@ class _PillWindow(QWidget):
         self._hover_controls = False
         self._text_window: "_TextPopup | None" = None
         self._mica_applied = False
+
+        self._history_panel: "_HistoryPanel | None" = None
+        self._history_open_timer = QTimer(self)
+        self._history_open_timer.setSingleShot(True)
+        self._history_open_timer.setInterval(_HISTORY_OPEN_DELAY_MS)
+        self._history_open_timer.timeout.connect(self._try_open_history)
+        self._history_close_timer = QTimer(self)
+        self._history_close_timer.setSingleShot(True)
+        self._history_close_timer.setInterval(_HISTORY_CLOSE_DELAY_MS)
+        self._history_close_timer.timeout.connect(self._try_close_history)
 
         self._pulse_timer = QTimer(self)
         self._pulse_timer.setInterval(_PULSE_PERIOD_MS)
@@ -299,10 +316,87 @@ class _PillWindow(QWidget):
     def enterEvent(self, event):  # noqa: N802
         self._hover_controls = True
         self.update()
+        self._history_close_timer.stop()
+        if self._history_hover_allowed():
+            self._history_open_timer.start()
 
     def leaveEvent(self, event):  # noqa: N802
         self._hover_controls = False
         self.update()
+        self._history_open_timer.stop()
+        if self._history_panel is not None and self._history_panel.isVisible():
+            self._history_close_timer.start()
+
+    def _history_hover_allowed(self) -> bool:
+        if self._dismissed:
+            return False
+        cb = self._ind._get_history_hover_enabled
+        if cb is None:
+            return False
+        try:
+            return bool(cb())
+        except Exception:
+            log.exception("get_history_hover_enabled failed")
+            return False
+
+    def _try_open_history(self) -> None:
+        if not self._history_hover_allowed() or not self.isVisible():
+            return
+        cb = self._ind._get_history_entries
+        if cb is None:
+            return
+        try:
+            entries = list(cb() or [])
+        except Exception:
+            log.exception("get_history_entries failed")
+            return
+        if not entries:
+            return
+        if self._history_panel is None:
+            self._history_panel = _HistoryPanel(self)
+        self._history_panel.set_entries(entries)
+        px = self.x() + (_WIN_W - self._history_panel.width()) // 2
+        py = self.y() - self._history_panel.height() - 6
+        self._history_panel.move(px, py)
+        self._history_panel.show()
+        self._history_panel.raise_()
+
+    def _try_close_history(self) -> None:
+        if self._history_panel is None or not self._history_panel.isVisible():
+            return
+        if self._hover_controls or self._history_panel.underMouse():
+            return
+        self._history_panel.hide()
+
+    def _panel_hover_enter(self) -> None:
+        self._history_close_timer.stop()
+
+    def _panel_hover_leave(self) -> None:
+        if not self._hover_controls:
+            self._history_close_timer.start()
+
+    def _hide_history_panel(self) -> None:
+        self._history_open_timer.stop()
+        self._history_close_timer.stop()
+        if self._history_panel is not None and self._history_panel.isVisible():
+            self._history_panel.hide()
+
+    def refresh_history_panel(self) -> None:
+        """Re-read entries while the panel is visible (called after a discard)."""
+        if self._history_panel is None or not self._history_panel.isVisible():
+            return
+        cb = self._ind._get_history_entries
+        if cb is None:
+            return
+        try:
+            entries = list(cb() or [])
+        except Exception:
+            log.exception("get_history_entries failed")
+            return
+        if not entries:
+            self._history_panel.hide()
+            return
+        self._history_panel.set_entries(entries)
 
     def _show_menu(self) -> None:
         items: list = []
@@ -388,6 +482,7 @@ class _PillWindow(QWidget):
         self._timer_text = ""
         if self._text_window is not None:
             self._text_window.hide()
+        self._hide_history_panel()
         self._fade_out_and_hide()
         if notify and self._ind._on_dismiss_notify is not None:
             _safe_call(self._ind._on_dismiss_notify, "on_dismiss")
@@ -465,6 +560,15 @@ class _PillWindow(QWidget):
     def _slot_destroy(self) -> None:
         self._pulse_timer.stop()
         self._elapsed_timer.stop()
+        self._history_open_timer.stop()
+        self._history_close_timer.stop()
+        if self._history_panel is not None:
+            try:
+                self._history_panel.close()
+                self._history_panel.deleteLater()
+            except RuntimeError:
+                pass
+            self._history_panel = None
         if self._text_window is not None:
             try:
                 self._text_window.close()
@@ -565,6 +669,116 @@ class _TextPopup(QWidget):
         self.hide()
 
 
+class _HistoryPanel(QWidget):
+    """Hover-expand panel showing the last N history entries (newest first).
+
+    Left-click a row → re-paste. Right-click a row → discard that entry.
+    Panel width is fixed; height grows with entry count.
+    """
+
+    def __init__(self, pill: _PillWindow):
+        super().__init__(
+            None,
+            Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool,
+        )
+        self._pill = pill
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.setMouseTracking(True)
+        self._entries: list = []
+        self._hover_row = -1
+        self.resize(_HISTORY_PANEL_W, _HISTORY_PAD * 2 + _HISTORY_ROW_H)
+
+    def showEvent(self, event):  # noqa: N802
+        super().showEvent(event)
+        try:
+            _set_no_activate(int(self.winId()))
+        except Exception:
+            pass
+
+    def set_entries(self, entries: list) -> None:
+        # Caller passes newest-last (like a deque). Flip to newest-first for display.
+        self._entries = list(reversed(entries))[:_HISTORY_MAX_ROWS]
+        rows = max(1, len(self._entries))
+        self.resize(_HISTORY_PANEL_W, _HISTORY_PAD * 2 + rows * _HISTORY_ROW_H)
+        self._hover_row = -1
+        self.update()
+
+    def _row_at(self, y: float) -> int:
+        if not self._entries:
+            return -1
+        idx = (int(y) - _HISTORY_PAD) // _HISTORY_ROW_H
+        if 0 <= idx < len(self._entries):
+            return int(idx)
+        return -1
+
+    def paintEvent(self, event):  # noqa: N802
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        w, h = self.width(), self.height()
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(0, 0, w, h), 12, 12)
+        p.fillPath(path, QColor(_BAR_BG))
+
+        for idx, entry in enumerate(self._entries):
+            row_y = _HISTORY_PAD + idx * _HISTORY_ROW_H
+            row_rect = QRectF(4, row_y, w - 8, _HISTORY_ROW_H - 2)
+            if idx == self._hover_row:
+                hov = QPainterPath()
+                hov.addRoundedRect(row_rect, 6, 6)
+                p.fillPath(hov, QColor("#2f2f2f"))
+
+            ts_text = time.strftime("%H:%M", time.localtime(entry.timestamp))
+            p.setPen(QColor("#888888"))
+            p.setFont(QFont("Segoe UI", 8))
+            p.drawText(
+                QRect(int(row_rect.x()) + 8, row_y, 40, _HISTORY_ROW_H - 2),
+                Qt.AlignVCenter | Qt.AlignLeft, ts_text,
+            )
+
+            raw = entry.text or ""
+            text = raw if len(raw) <= 60 else raw[:57] + "\u2026"
+            p.setPen(QColor("#dddddd"))
+            p.setFont(QFont("Segoe UI", 9))
+            p.drawText(
+                QRect(int(row_rect.x()) + 56, row_y,
+                      int(row_rect.width()) - 64, _HISTORY_ROW_H - 2),
+                Qt.AlignVCenter | Qt.AlignLeft, text,
+            )
+        p.end()
+
+    def enterEvent(self, event):  # noqa: N802
+        self._pill._panel_hover_enter()
+
+    def leaveEvent(self, event):  # noqa: N802
+        self._hover_row = -1
+        self.update()
+        self._pill._panel_hover_leave()
+
+    def mouseMoveEvent(self, event):  # noqa: N802
+        new_row = self._row_at(event.position().y())
+        if new_row != self._hover_row:
+            self._hover_row = new_row
+            self.update()
+
+    def mousePressEvent(self, event):  # noqa: N802
+        row = self._row_at(event.position().y())
+        if row < 0 or row >= len(self._entries):
+            return
+        entry = self._entries[row]
+        ind = self._pill._ind
+        if event.button() == Qt.LeftButton:
+            self.hide()
+            cb = ind._on_history_repaste
+            if cb is not None:
+                _safe_call(lambda: cb(entry), "on_history_repaste")
+        elif event.button() == Qt.RightButton:
+            cb = ind._on_history_discard
+            if cb is not None:
+                _safe_call(lambda: cb(entry), "on_history_discard")
+            self._pill.refresh_history_panel()
+
+
 class RecordingIndicator:
     """Always-visible pill-bar overlay (PySide6 backend).
 
@@ -589,6 +803,10 @@ class RecordingIndicator:
         visible_on_start: bool = True,
         get_mode_name: Callable[[], str] | None = None,
         on_mode_click: Callable[[], None] | None = None,
+        get_history_entries: Callable[[], list] | None = None,
+        get_history_hover_enabled: Callable[[], bool] | None = None,
+        on_history_repaste: Callable[[object], None] | None = None,
+        on_history_discard: Callable[[object], None] | None = None,
     ):
         self._on_mic_click = on_mic_click
         self._on_dismiss_notify = on_dismiss
@@ -596,6 +814,10 @@ class RecordingIndicator:
         self._visible_on_start = visible_on_start
         self._get_mode_name = get_mode_name
         self._on_mode_click = on_mode_click
+        self._get_history_entries = get_history_entries
+        self._get_history_hover_enabled = get_history_hover_enabled
+        self._on_history_repaste = on_history_repaste
+        self._on_history_discard = on_history_discard
 
         self._thread: threading.Thread | None = None
         self._ready = threading.Event()
