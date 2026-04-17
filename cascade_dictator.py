@@ -1,6 +1,7 @@
 """Cloud → local fallback dictation orchestrator.
 
-Cloud path: one OpenRouter audio-chat call returns polished text.
+Cloud path: delegate to any `CloudProvider` (OpenRouter, Groq, ...) — the provider
+returns already-polished text.
 Local fallback path branches by mode:
   - "streaming" → Whisper + apply_formatting_commands (regex).
   - "batch"     → Whisper + postprocess_text (Ollama).
@@ -11,7 +12,7 @@ recording indicator and per-segment timing log can label each result.
 
 import logging
 
-from cloud_dictator import CloudDictator, CloudUnavailable
+from cloud_dictator import CloudProvider, CloudUnavailable
 from transcriber import Transcriber
 
 log = logging.getLogger("transcriber.cascade_dictator")
@@ -21,7 +22,7 @@ class CascadeDictator:
     def __init__(
         self,
         *,
-        cloud: CloudDictator | None,
+        cloud: CloudProvider | None,
         transcriber: Transcriber,
         pp_config: dict,
         build_system_prompt,

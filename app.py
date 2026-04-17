@@ -21,7 +21,7 @@ import notifications
 import shortcut
 import sounds
 from cascade_dictator import CascadeDictator
-from cloud_dictator import CloudDictator
+from cloud_dictator import OpenRouterDictator
 from config import load_config
 from recorder import Recorder, StreamingRecorder
 from transcriber import Transcriber
@@ -81,20 +81,42 @@ class TranscriberApp:
         cc = self.config["whisper"]["cloud"]
         cloud = None
         if cc["enabled"] and cc["api_key"]:
-            cloud = CloudDictator(
-                api_key=cc["api_key"],
-                model=cc["model"],
-                base_url=cc["base_url"],
-                referer=cc["referer"],
-                title=cc["title"],
-                timeout=cc["timeout"],
-                failure_threshold=cc["failure_threshold"],
-                cooldown_s=cc["cooldown_s"],
-            )
-            log.info(
-                "cloud dictation: enabled (provider=%s model=%s)",
-                cc["provider"], cc["model"],
-            )
+            provider = cc["provider"]
+            if provider == "groq":
+                from groq_dictator import GroqDictator
+                cloud = GroqDictator(
+                    api_key=cc["api_key"],
+                    stt_model=cc["stt_model"],
+                    polish_model=cc["polish_model"],
+                    base_url=cc["groq_base_url"],
+                    stt_timeout=cc["stt_timeout"],
+                    polish_timeout=cc["polish_timeout"],
+                    failure_threshold=cc["failure_threshold"],
+                    cooldown_s=cc["cooldown_s"],
+                )
+                log.info(
+                    "cloud dictation: enabled (provider=groq stt=%s polish=%s)",
+                    cc["stt_model"], cc["polish_model"],
+                )
+            elif provider == "openrouter":
+                cloud = OpenRouterDictator(
+                    api_key=cc["api_key"],
+                    model=cc["model"],
+                    base_url=cc["base_url"],
+                    referer=cc["referer"],
+                    title=cc["title"],
+                    timeout=cc["timeout"],
+                    failure_threshold=cc["failure_threshold"],
+                    cooldown_s=cc["cooldown_s"],
+                )
+                log.info(
+                    "cloud dictation: enabled (provider=openrouter model=%s)",
+                    cc["model"],
+                )
+            else:
+                log.error(
+                    "cloud dictation: unknown provider %r — disabling cloud", provider,
+                )
         elif cc["enabled"]:
             log.info("cloud dictation: enabled in config but api_key missing — using local only")
         else:

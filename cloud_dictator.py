@@ -1,8 +1,10 @@
-"""OpenRouter audio-chat cloud dictation: audio + system prompt → polished text.
+"""Cloud dictation provider interface + OpenRouter audio-chat implementation.
 
-Single-call path: transcription + formatting + personal vocabulary handled by the
-remote LLM. Wraps requests with a circuit breaker that opens on repeated failures,
-auth errors, and rate-limit responses.
+`CloudProvider` is the abstract base every cascade-compatible dictation backend
+implements. `_CircuitBreaker` holds the shared failure-tracking / rate-limit
+state so each concrete provider (OpenRouter, Groq, ...) inherits identical
+breaker semantics. `OpenRouterDictator` is the one-call audio-chat path — it
+uploads audio + system prompt and receives polished text in a single request.
 """
 
 import base64
@@ -23,47 +25,21 @@ class CloudUnavailable(Exception):
     """Raised when the cloud path is unreachable and the caller should fall back."""
 
 
-class CloudDictator:
-    """Post audio to OpenRouter chat/completions with an `input_audio` message.
+class _CircuitBreaker:
+    """Shared failure tracking for cloud providers.
 
-    The remote model both transcribes and applies the system-prompt rules
-    (punctuation, formatting commands, personal vocabulary). Returns the polished
-    text directly — no separate post-processing step.
+    Concrete providers call `_breaker_allows()` before issuing a request and
+    `_trip_breaker()` / `_reset_breaker()` depending on outcome. A single
+    invalid-auth response permanently disables the breaker until restart.
     """
 
-    def __init__(
-        self,
-        api_key: str,
-        *,
-        model: str = "openai/gpt-audio",
-        base_url: str = "https://openrouter.ai/api/v1",
-        referer: str = "https://github.com/freekmetsch/transcriber",
-        title: str = "Transcriber",
-        timeout: float = 2.0,
-        failure_threshold: int = 3,
-        cooldown_s: float = 60.0,
-    ):
-        self._api_key = api_key
-        self._model = model
-        self._base_url = base_url.rstrip("/")
-        self._referer = referer
-        self._title = title
-        self._timeout = timeout
+    def __init__(self, *, failure_threshold: int = 3, cooldown_s: float = 60.0):
         self._failure_threshold = failure_threshold
         self._cooldown_s = cooldown_s
-        self._session = requests.Session()
         self._lock = threading.Lock()
         self._failures: int = 0
         self._breaker_open_until: float = 0.0
         self._key_invalid: bool = False
-
-    def _wav_bytes(self, audio: np.ndarray) -> bytes:
-        """Serialize a 16 kHz float32 mono numpy array to PCM_16 WAV bytes."""
-        import soundfile  # Lazy import — avoids startup cost when cloud disabled.
-
-        buf = io.BytesIO()
-        soundfile.write(buf, audio, 16000, format="WAV", subtype="PCM_16")
-        return buf.getvalue()
 
     def _breaker_allows(self) -> bool:
         now = time.monotonic()
@@ -92,6 +68,82 @@ class CloudDictator:
                 log.info("cloud: circuit breaker closed — recovered")
             self._failures = 0
             self._breaker_open_until = 0.0
+
+    def _mark_key_invalid(self) -> None:
+        with self._lock:
+            if not self._key_invalid:
+                log.error("cloud: invalid API key — cascade disabled until restart")
+            self._key_invalid = True
+
+    def _force_breaker_open(self, duration_s: float) -> None:
+        with self._lock:
+            self._breaker_open_until = time.monotonic() + duration_s
+
+    @staticmethod
+    def _parse_retry_after(value: str | None) -> float:
+        if not value:
+            return 60.0
+        try:
+            return max(1.0, float(value))
+        except ValueError:
+            return 60.0
+
+    def _check_auth_and_rate(self, r: requests.Response, *, label: str) -> None:
+        """Translate 401/429 into breaker effects. Other statuses are caller's problem."""
+        if r.status_code == 401:
+            self._mark_key_invalid()
+            raise CloudUnavailable(f"{label}-auth")
+        if r.status_code == 429:
+            retry_after = self._parse_retry_after(r.headers.get("Retry-After"))
+            log.warning("cloud: %s rate-limited (Retry-After=%s)", label, retry_after)
+            self._force_breaker_open(retry_after)
+            raise CloudUnavailable(f"{label}-rate-limited")
+
+
+class CloudProvider:
+    """Abstract cloud dictation interface. Implementations return polished text."""
+
+    def dictate(self, audio: np.ndarray, *, system_prompt: str) -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def _wav_bytes(audio: np.ndarray) -> bytes:
+        """Serialize a 16 kHz float32 mono numpy array to PCM_16 WAV bytes."""
+        import soundfile  # Lazy import — avoids startup cost when cloud disabled.
+
+        buf = io.BytesIO()
+        soundfile.write(buf, audio, 16000, format="WAV", subtype="PCM_16")
+        return buf.getvalue()
+
+
+class OpenRouterDictator(_CircuitBreaker, CloudProvider):
+    """Post audio to OpenRouter chat/completions with an `input_audio` message.
+
+    The remote model both transcribes and applies the system-prompt rules
+    (punctuation, formatting commands, personal vocabulary). Returns the polished
+    text directly — no separate post-processing step.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        model: str = "openai/gpt-audio",
+        base_url: str = "https://openrouter.ai/api/v1",
+        referer: str = "https://github.com/freekmetsch/transcriber",
+        title: str = "Transcriber",
+        timeout: float = 2.0,
+        failure_threshold: int = 3,
+        cooldown_s: float = 60.0,
+    ):
+        super().__init__(failure_threshold=failure_threshold, cooldown_s=cooldown_s)
+        self._api_key = api_key
+        self._model = model
+        self._base_url = base_url.rstrip("/")
+        self._referer = referer
+        self._title = title
+        self._timeout = timeout
+        self._session = requests.Session()
 
     def dictate(self, audio: np.ndarray, *, system_prompt: str) -> str:
         """Return polished text for `audio`. Raises `CloudUnavailable` on any failure."""
@@ -148,20 +200,7 @@ class CloudDictator:
             self._trip_breaker()
             raise CloudUnavailable("timeout") from exc
 
-        if r.status_code == 401:
-            with self._lock:
-                if not self._key_invalid:
-                    log.error("cloud: invalid API key — cascade disabled until restart")
-                self._key_invalid = True
-            raise CloudUnavailable("auth")
-
-        if r.status_code == 429:
-            retry_after = self._parse_retry_after(r.headers.get("Retry-After"))
-            log.warning("cloud: rate-limited (Retry-After=%s)", retry_after)
-            # Force the breaker open for the reported duration regardless of failure count.
-            with self._lock:
-                self._breaker_open_until = time.monotonic() + retry_after
-            raise CloudUnavailable("rate-limited")
+        self._check_auth_and_rate(r, label="openrouter")
 
         if not r.ok:
             log.warning("cloud: HTTP %d — %s", r.status_code, r.text[:200])
@@ -183,12 +222,3 @@ class CloudDictator:
 
         self._reset_breaker()
         return text.strip()
-
-    @staticmethod
-    def _parse_retry_after(value: str | None) -> float:
-        if not value:
-            return 60.0
-        try:
-            return max(1.0, float(value))
-        except ValueError:
-            return 60.0

@@ -421,11 +421,14 @@ class RecordingIndicator:
             self._root.after(0, lambda: self._do_set_state(state))
 
     def _do_set_state(self, state: str):
+        prev = self._current_state
         self._current_state = state
         self._stop_pulse()
         self._recolor_mic(_STATE_COLORS[state])
         if state == "transcribing":
             self._start_pulse()
+        elif state == "listening" and prev != "listening":
+            self._reset_level_bar()
 
     def show_text(self, text: str, language: str = "", confidence: float = 1.0):
         """Show transcribed text as popup above bar (auto-fades after 3s). Thread-safe.
@@ -469,11 +472,17 @@ class RecordingIndicator:
 
     def update_level(self, rms: float):
         """Update the mic level bar. Thread-safe."""
-        if self._root:
+        # Gate at the audio-callback thread: while not listening the bar is frozen
+        # anyway, so skip scheduling a Tk round-trip (~10-15 Hz from mic callback).
+        if self._root and self._current_state == "listening":
             self._root.after(0, lambda: self._do_update_level(rms))
 
     def _do_update_level(self, rms: float):
         if self._level_bar is None or self._canvas is None:
+            return
+        # Bar motion means "mic is live and hearing you right now." Freeze while
+        # transcribing/processing so state color alone signals the working phase.
+        if self._current_state != "listening":
             return
         # Normalize: speech typically peaks around 0.05 RMS on 16 kHz mono float32.
         width = min(max(rms, 0.0) / 0.05, 1.0) * 50.0

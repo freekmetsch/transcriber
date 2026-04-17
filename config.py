@@ -20,9 +20,17 @@ DEFAULT_CONFIG = {
         "compute_type": "float16",
         "cloud": {
             "enabled": True,
-            "provider": "openrouter",
+            "provider": "groq",
+            # Groq two-call path (default):
+            "stt_model": "whisper-large-v3-turbo",
+            "polish_model": "llama-3.3-70b-versatile",
+            "stt_timeout": 1.0,
+            "polish_timeout": 1.2,
+            "groq_base_url": "https://api.groq.com/openai/v1",
+            # OpenRouter audio-chat alternative (set provider: openrouter to use):
             "model": "openai/gpt-audio",
             "base_url": "https://openrouter.ai/api/v1",
+            # Common:
             "api_key": "",
             "referer": "https://github.com/freekmetsch/transcriber",
             "title": "Transcriber",

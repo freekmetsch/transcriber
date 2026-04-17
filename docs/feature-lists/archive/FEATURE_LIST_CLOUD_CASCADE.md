@@ -1,7 +1,7 @@
 # Feature List: Cloud Dictation via OpenRouter Audio-Chat + Local Fallback + Live Audio Feedback
 
 Date: 2026-04-16
-Status: Implementation complete — pending manual verification (T_C6)
+Status: Superseded by FEATURE_LIST_CLOUD_SPEED_V2.md (2026-04-17) — provider flipped to Groq two-call STT+polish after observed hallucination regression on `openai/gpt-audio`. OpenRouter audio-chat path preserved as alternative provider.
 Scope: OpenRouter audio-chat primary (transcription + formatting + vocabulary in one call), local faster-whisper + Ollama fallback, live audio-level indicator (delegated)
 Owner: Freek
 

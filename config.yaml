@@ -16,15 +16,22 @@ whisper:
   device: cuda             # Options: cuda, cpu
   compute_type: float16    # Options: float16 (GPU), int8 (CPU), float32
 
-  # Cloud dictation via OpenRouter audio-chat: one call does transcription +
-  # formatting + personal vocabulary. Falls back to local Whisper + (streaming:
-  # formatting commands | batch: Ollama) when disabled, offline, or rate-limited.
+  # Cloud dictation. Default: Groq two-call (Whisper STT → Llama text polish) —
+  # eliminates the audio-chat hallucination class by construction. Falls back
+  # to local Whisper + (streaming: formatting commands | batch: Ollama) on
+  # failure, rate-limit, or offline.
   cloud:
-    enabled: true                   # Falls back to local if api_key is empty.
-    provider: openrouter
-    model: openai/gpt-audio         # Alternatives: openai/gpt-4o-audio-preview
+    enabled: true                          # Falls back to local if api_key is empty.
+    provider: groq                         # groq | openrouter
+    # Groq two-call (default):
+    stt_model: whisper-large-v3-turbo
+    polish_model: llama-3.3-70b-versatile
+    stt_timeout: 1.0                       # STT read timeout (s) before fallback.
+    polish_timeout: 1.2                    # Polish read timeout (s); soft-fails to raw STT.
+    # OpenRouter audio-chat alternative (used only when provider: openrouter):
+    #   model: openai/gpt-audio
+    #   timeout: 2.0
     # api_key: SET IN config.local.yaml — never commit here.
-    timeout: 2.0                    # Read timeout (seconds) before falling back.
 
 # LLM post-processing (Ollama)
 postprocessing:
@@ -37,7 +44,7 @@ postprocessing:
 streaming:
   enabled: true              # false = batch mode (record all, transcribe at end)
   silence_threshold: 0.01    # RMS energy threshold for speech detection
-  silence_duration_ms: 1500   # Silence gap (ms) before segment boundary
+  silence_duration_ms: 700   # Silence gap (ms) before segment boundary; dominates felt latency — raise to 900 if mid-sentence pauses cut early
   min_segment_ms: 500        # Ignore segments shorter than this (coughs, clicks)
   max_segment_s: 30          # Force-cut very long segments
 
