@@ -68,6 +68,7 @@ _HISTORY_PAD = 8
 _HISTORY_MAX_ROWS = 3
 _HISTORY_OPEN_DELAY_MS = 300
 _HISTORY_CLOSE_DELAY_MS = 200
+_HISTORY_AUTOHIDE_MS = 4000
 
 _FADE_DURATION_MS = 140
 _TARGET_OPACITY = 0.92
@@ -118,6 +119,7 @@ class _PillWindow(QWidget):
     sig_show_text = Signal(str, str, float)
     sig_update_level = Signal(float)
     sig_show_feedback = Signal(str)
+    sig_show_history_panel = Signal(list)
     sig_destroy = Signal()
 
     def __init__(self, indicator: "RecordingIndicator"):
@@ -151,6 +153,10 @@ class _PillWindow(QWidget):
         self._history_close_timer.setSingleShot(True)
         self._history_close_timer.setInterval(_HISTORY_CLOSE_DELAY_MS)
         self._history_close_timer.timeout.connect(self._try_close_history)
+        self._history_autohide_timer = QTimer(self)
+        self._history_autohide_timer.setSingleShot(True)
+        self._history_autohide_timer.setInterval(_HISTORY_AUTOHIDE_MS)
+        self._history_autohide_timer.timeout.connect(self._try_close_history)
 
         self._pulse_timer = QTimer(self)
         self._pulse_timer.setInterval(_PULSE_PERIOD_MS)
@@ -176,6 +182,7 @@ class _PillWindow(QWidget):
         self.sig_show_text.connect(self._slot_show_text)
         self.sig_update_level.connect(self._slot_update_level)
         self.sig_show_feedback.connect(self._slot_show_feedback)
+        self.sig_show_history_panel.connect(self._slot_show_history_panel)
         self.sig_destroy.connect(self._slot_destroy)
 
     # --- Position persistence ---
@@ -350,8 +357,12 @@ class _PillWindow(QWidget):
         except Exception:
             log.exception("get_history_entries failed")
             return
+        self._present_history_panel(entries)
+
+    def _present_history_panel(self, entries: list) -> bool:
+        """Lazy-create, position, and show the panel. Returns False on empty entries."""
         if not entries:
-            return
+            return False
         if self._history_panel is None:
             self._history_panel = _HistoryPanel(self)
         self._history_panel.set_entries(entries)
@@ -360,6 +371,12 @@ class _PillWindow(QWidget):
         self._history_panel.move(px, py)
         self._history_panel.show()
         self._history_panel.raise_()
+        return True
+
+    def _stop_history_timers(self) -> None:
+        self._history_open_timer.stop()
+        self._history_close_timer.stop()
+        self._history_autohide_timer.stop()
 
     def _try_close_history(self) -> None:
         if self._history_panel is None or not self._history_panel.isVisible():
@@ -370,16 +387,24 @@ class _PillWindow(QWidget):
 
     def _panel_hover_enter(self) -> None:
         self._history_close_timer.stop()
+        self._history_autohide_timer.stop()
 
     def _panel_hover_leave(self) -> None:
         if not self._hover_controls:
             self._history_close_timer.start()
 
     def _hide_history_panel(self) -> None:
-        self._history_open_timer.stop()
-        self._history_close_timer.stop()
+        self._stop_history_timers()
         if self._history_panel is not None and self._history_panel.isVisible():
             self._history_panel.hide()
+
+    def _slot_show_history_panel(self, entries: list) -> None:
+        """Explicit open (e.g. tray "Session history..."). Bypasses hover gate."""
+        if self._dismissed:
+            self._slot_restore()
+        self._stop_history_timers()
+        if self._present_history_panel(entries):
+            self._history_autohide_timer.start()
 
     def refresh_history_panel(self) -> None:
         """Re-read entries while the panel is visible (called after a discard)."""
@@ -903,6 +928,13 @@ class RecordingIndicator:
     def show_feedback(self, feedback_type: str = "success") -> None:
         if self._window is not None:
             self._window.sig_show_feedback.emit(feedback_type)
+
+    supports_history_panel = True
+
+    def show_history_panel(self, entries) -> None:
+        """Explicitly open the history panel (restores the pill if dismissed)."""
+        if self._window is not None:
+            self._window.sig_show_history_panel.emit(list(entries))
 
     def destroy(self) -> None:
         if self._window is not None:

@@ -1,8 +1,8 @@
 # Feature List: UI + Overlay — Merged Remaining Work
 
 Date: 2026-04-17
-Status: In progress — Q1-1…Q1-4, Q2-1…Q2-3 shipped 2026-04-17 (Q1-4 lands the hover-expand panel Q2-4 was gated on)
-Open phases: Q2-5 (tray Session history), Q3, Q4
+Status: In progress — Q1-1…Q1-4, Q2-1…Q2-5 shipped 2026-04-17 (Q1-4 lands the hover-expand panel Q2-4 was gated on)
+Open phases: Q3, Q4
 Scope: All not-yet-shipped features from `FEATURE_LIST_UI_OVERHAUL.md` (2026-04-15)
   and `FEATURE_LIST_OVERLAY_OVERHAUL.md` (2026-04-17)
 Owner: Freek
@@ -377,11 +377,19 @@ to avoid building theming / segment counter twice.
   of Q1-4.
 - `config.yaml` gained `ui.repaste_hotkey`, `ui.history_length`,
   `ui.show_history_on_hover`.
+- Q2-5 tray "Session history\u2026" item shipped. Backends expose a
+  `supports_history_panel` capability flag; tray menu only appends the
+  item when the flag is true (Qt=True, Tk=False). `show_history_panel`
+  public method on the indicator restores the pill if dismissed and
+  briefly opens the hover-expand panel (4 s auto-hide, held open while
+  the user hovers panel or pill). Qt slot shares a new
+  `_present_history_panel` helper with `_try_open_history` so the
+  positioning math lives in one place.
 - `FEATURE_LIST_OVERLAY_OVERHAUL.md` P1 + P2 in code, smoke still
   pending.
 - `FEATURE_LIST_UI_OVERHAUL.md`: F1, F2, F3, F4, F5, F7, F17, F18, F19,
-  F24, F28, F29 (partial), F10, F11 already shipped; F23 partially
-  shipped (Copy last added; Session history still pending hover-expand).
+  F24, F28, F29 (partial), F10, F11 already shipped; F23 fully shipped
+  (Copy last + Session history\u2026 both live).
 - No theming beyond dark palette. No cheat sheet. No VAD tuner.
 
 **Pending verification before `/run` of Q1**:
@@ -391,8 +399,11 @@ to avoid building theming / segment counter twice.
   "stop listening", "delete that", Code mode = `local-raw`).
 
 **First command (next window)**: `/run docs/feature-lists/FEATURE_LIST_UI_OVERHAUL_MERGED.md`
-— resume at Q2-5 (tray "Session history…" item that restores + briefly
-opens the hover-expand panel; hidden when `ui.overlay_backend: tk`).
+— resume at Q3-1 (Light theme: `ui.theme: dark | light | system`, Qt
+palette + QSS per theme, tray `_ICON_STATES` rebuild on theme change,
+mic glyph switches to `#1a1a1a` for light; `system` reads Windows
+`AppsUseLightTheme` at startup and on
+`QGuiApplication.styleHints().colorSchemeChanged`).
 
 **Manual smoke still pending (do before further Q1 work)**:
 - P1 + P2 smoke on the Tk backend first: flip
@@ -404,8 +415,8 @@ opens the hover-expand panel; hidden when `ui.overlay_backend: tk`).
   regression. 30-minute soak while dictating to watch for COM / thread
   issues (H1).
 
-**Remaining execution order**: Q2-5 → Q3-1…Q3-4 → Q4-1 → Q4-2 → Q4-3.
-(Q1-1…Q1-4, Q2-1…Q2-4 done; Q2-4 folded into Q1-4.)
+**Remaining execution order**: Q3-1 → Q3-2 → Q3-3 → Q3-4 → Q4-1 →
+Q4-2 → Q4-3. (Q1-1…Q1-4, Q2-1…Q2-5 done; Q2-4 folded into Q1-4.)
 
 **Smoke still to run (Q2 shipped tickets)**:
 1. Dictate a segment → tray "Copy last transcription" enabled → clicking
@@ -419,6 +430,10 @@ opens the hover-expand panel; hidden when `ui.overlay_backend: tk`).
    back to prior entry or empty toast).
 5. Restart app → `ui.repaste_hotkey` / `ui.history_length` honored from
    `config.yaml`.
+6. Dictate a segment → tray "Session history\u2026" → panel appears
+   briefly above the pill (restoring it first if dismissed); hovering
+   the panel holds it open, otherwise it auto-hides after ~4 s. Flip
+   `ui.overlay_backend: tk` → tray item disappears.
 
 ---
 

@@ -762,6 +762,14 @@ class TranscriberApp:
         self._return_to_idle()
         self._last_action_status = "Cancelled"
 
+    def _show_session_history(self, icon=None, item=None):
+        """Tray handler: open the session-history panel (restores the pill if dismissed)."""
+        if not self._history:
+            sounds.play_error()
+            notifications.notify_info("No session history", "Nothing dictated yet")
+            return
+        self._recording_indicator.show_history_panel(self._history)
+
     def _copy_last(self, icon=None, item=None):
         """Copy the most recent transcription to the clipboard."""
         if not self._history:
@@ -901,6 +909,16 @@ class TranscriberApp:
                 self._copy_last,
                 enabled=lambda item: bool(self._history),
             ),
+        ])
+        if self._recording_indicator.supports_history_panel:
+            menu_items.append(
+                pystray.MenuItem(
+                    "Session history\u2026",
+                    self._show_session_history,
+                    enabled=lambda item: bool(self._history),
+                ),
+            )
+        menu_items.extend([
             pystray.MenuItem(
                 lambda item: f"Mode: {self._modes.current().name}  "
                              f"\u2192 next ({self.config['ui'].get('cycle_mode_hotkey', 'ctrl+shift+m')})",

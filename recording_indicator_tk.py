@@ -718,6 +718,12 @@ class RecordingIndicator:
 
         self._root.after(350, _revert)
 
+    supports_history_panel = False
+
+    def show_history_panel(self, entries) -> None:
+        """No-op on the Tk backend — hover-expand history is Qt-only."""
+        del entries
+
     def destroy(self):
         """Shut down the Tk thread."""
         if self._root:
