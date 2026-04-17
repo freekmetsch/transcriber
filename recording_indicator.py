@@ -18,13 +18,15 @@ log = logging.getLogger("transcriber.recording_indicator")
 
 _POS_FILE = Path(__file__).parent / "indicator_pos.json"
 
-_WIN_W, _WIN_H = 200, 48
+_WIN_W, _WIN_H = 230, 48
 
 # Click zones (Canvas x-coordinates)
 _GEAR_X_MAX = 30         # x <= 30 → gear (opens menu)
 _MIC_X_MIN = 50          # 50 <= x <= 130 → mic button (toggle recording)
 _MIC_X_MAX = 130
-_CLOSE_X_MIN = 170       # x >= 170 → close X (dismiss overlay)
+_MODE_X_MIN = 162        # 162 <= x <= 206 → mode chip (cycle modes)
+_MODE_X_MAX = 206
+_CLOSE_X_MIN = 208       # x >= 208 → close X (dismiss overlay)
 
 _FADE_IN_ALPHAS = (0.0, 0.2, 0.4, 0.6, 0.8, 0.92)
 _FADE_OUT_ALPHAS = (0.92, 0.7, 0.5, 0.3, 0.1, 0.0)
@@ -63,11 +65,15 @@ class RecordingIndicator:
         on_dismiss: Callable[[], None] | None = None,
         get_menu_items: Callable[[], list] | None = None,
         visible_on_start: bool = True,
+        get_mode_name: Callable[[], str] | None = None,
+        on_mode_click: Callable[[], None] | None = None,
     ):
         self._on_mic_click = on_mic_click
         self._on_dismiss_notify = on_dismiss
         self._get_menu_items = get_menu_items
         self._visible_on_start = visible_on_start
+        self._get_mode_name = get_mode_name
+        self._on_mode_click = on_mode_click
         self._dismissed = not visible_on_start
 
         self._root: tk.Tk | None = None
@@ -97,6 +103,8 @@ class RecordingIndicator:
         self._timer_id: str | None = None
         self._gear_item: int | None = None
         self._close_item: int | None = None
+        self._mode_chip_rect: int | None = None
+        self._mode_chip_text: int | None = None
 
     def start(self):
         """Start the Tk thread. Call once during app init."""
@@ -174,16 +182,27 @@ class RecordingIndicator:
             fill=_STATE_COLORS["idle"], outline="",
         )
 
-        # Elapsed timer between mic and close
+        # Elapsed timer between mic and mode chip
         self._timer_item = self._canvas.create_text(
             150, _WIN_H // 2,
             text="", fill="#888888",
             font=("Segoe UI", 9), anchor="center",
         )
 
+        # Mode chip (click to cycle dictation modes)
+        self._mode_chip_rect = self._canvas.create_rectangle(
+            _MODE_X_MIN + 2, 15, _MODE_X_MAX - 2, 33,
+            fill="#2a2a2a", outline="#555555", width=1,
+        )
+        self._mode_chip_text = self._canvas.create_text(
+            (_MODE_X_MIN + _MODE_X_MAX) // 2, _WIN_H // 2,
+            text=self._get_mode_name() if self._get_mode_name else "",
+            fill="#bbbbbb", font=("Segoe UI", 8), anchor="center",
+        )
+
         # Close X (right) — dismisses the overlay
         self._close_item = self._canvas.create_text(
-            _WIN_W - 16, _WIN_H // 2,
+            _WIN_W - 14, _WIN_H // 2,
             text="\u2715", fill="#888888",
             font=("Segoe UI", 11, "bold"), anchor="center",
         )
@@ -291,6 +310,15 @@ class RecordingIndicator:
                     self._on_mic_click()
                 except Exception:
                     log.exception("on_mic_click callback failed")
+            return
+        # Mode chip zone → cycle modes
+        if _MODE_X_MIN <= event.x <= _MODE_X_MAX:
+            self._drag_data = None
+            if self._on_mode_click is not None:
+                try:
+                    self._on_mode_click()
+                except Exception:
+                    log.exception("on_mode_click callback failed")
             return
         # Anywhere else → drag
         self._drag_data = {
@@ -533,6 +561,17 @@ class RecordingIndicator:
 
     def is_dismissed(self) -> bool:
         return self._dismissed
+
+    def refresh_mode(self):
+        """Re-render the mode chip label from get_mode_name(). Thread-safe."""
+        if self._root:
+            self._root.after(0, self._do_refresh_mode)
+
+    def _do_refresh_mode(self):
+        if self._mode_chip_text is None or self._canvas is None:
+            return
+        name = self._get_mode_name() if self._get_mode_name else ""
+        self._canvas.itemconfig(self._mode_chip_text, text=name)
 
     def set_state(self, state: str):
         """Set display state: idle | listening | transcribing | processing. Thread-safe."""

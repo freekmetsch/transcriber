@@ -71,7 +71,10 @@ DEFAULT_CONFIG = {
         "show_language": True,
         "overlay_visible_on_start": True,
         "toggle_overlay_hotkey": "ctrl+shift+h",
+        "cycle_mode_hotkey": "ctrl+shift+m",
     },
+    # Dictation modes — None means use built-in defaults (Default, Email, Code).
+    "modes": None,
 }
 
 CONFIG_PATH = Path(__file__).parent / "config.yaml"

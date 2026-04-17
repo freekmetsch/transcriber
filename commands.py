@@ -1,9 +1,38 @@
-"""Formatting command definitions for dictation post-processing.
+"""Formatting and control command definitions for dictation.
 
-Maps spoken formatting commands to their output symbols.
+Two command layers:
+  - Formatting commands: inline phrases replaced by punctuation/whitespace
+    (applied by apply_formatting_commands, see below).
+  - Control commands: a full segment equal to one of these phrases triggers
+    a side-effect (stop recording, delete prior output) instead of pasting.
+    See detect_control_command.
 """
 
 import re
+
+
+# Control-command phrases → command id (matched only when they are the entire
+# segment transcript, after lowercasing and stripping outer punctuation). New
+# lines and paragraphs are handled by the formatting layer above, not here.
+CONTROL_COMMANDS: dict[str, str] = {
+    "stop listening":  "stop",
+    "stop dictating":  "stop",
+    "delete that":     "delete",
+    "scratch that":    "delete",
+}
+
+# Strip leading/trailing whitespace and common punctuation before matching.
+_CONTROL_STRIP = " \t\n\r.,!?;:\u201c\u201d\"'"
+
+
+def detect_control_command(text: str) -> str | None:
+    """Return a command id if `text` is a full-segment control phrase, else None."""
+    if not text:
+        return None
+    normalized = text.strip().strip(_CONTROL_STRIP).lower()
+    # Collapse internal whitespace so "delete  that" still matches.
+    normalized = re.sub(r"\s+", " ", normalized)
+    return CONTROL_COMMANDS.get(normalized)
 
 
 FORMATTING_COMMANDS: dict[str, str] = {

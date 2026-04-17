@@ -1,11 +1,64 @@
 # Feature List: Overlay Overhaul — Win+H Parity + Visual Modernization
 
 Date: 2026-04-17
-Status: P1 implemented (awaiting smoke test); P2 + P3 pending
+Status: P1 + P2 implemented (awaiting smoke test); P3 pending
 Scope: Recording overlay (always-visible), Win+H QoL parity, modes system, optional PySide6 visual port
 Owner: Freek
 
 ## Implementation Log
+
+**2026-04-17 — Phase P2 complete (modes + voice commands)**
+Files changed: `modes.py` (new), `commands.py` (+`CONTROL_COMMANDS` / `detect_control_command`),
+`cascade_dictator.py` (+`user_mode` param, raw-output branch), `postprocessor.py`
+(`build_cloud_system_prompt` now takes `polish_addendum`), `recording_indicator.py`
+(widened to 230 px, mode chip with `refresh_mode()` + click-to-cycle),
+`app.py` (+`ModeManager` init, `_cycle_mode`, `_dispatch_control_command`,
+Ctrl+Shift+M hotkey, tray+gear menu entries, `_last_output_length` tracking,
+`user_mode=` pass-through to dictator), `config.py` + `config.yaml`
+(`ui.cycle_mode_hotkey`, `modes:` section).
+
+Shipped in P2:
+- P2-1: `modes.py` — frozen `Mode` dataclass (`name`/`polish_prompt_addendum`/
+  `output_format`), `ModeManager` with JSON persistence at `mode_state.json`,
+  `load_modes(config_section)` loader; `DEFAULT_MODES = [Default, Email, Code]`.
+- P2-2: Overlay mode chip between timer and close X (widened `_WIN_W` 200→230,
+  new zones `_MODE_X_MIN/_MAX`, `refresh_mode()` public API). Click cycles.
+- P2-3: `Ctrl+Shift+M` cycle hotkey (configurable); toast confirms new mode.
+  Gear menu + tray menu both show current mode and cycle entry.
+- P2-4: `CascadeDictator.dictate(..., user_mode=None)`. When `output_format ==
+  "raw"` the cloud leg is skipped and `apply_formatting_commands` is bypassed —
+  Whisper text lands verbatim (ideal for Code mode). Otherwise the mode's
+  `polish_prompt_addendum` is injected as a new Rule 5 in the cloud system
+  prompt (vocab block re-numbers to 6). `last_path` becomes `local-raw` for
+  raw paths so telemetry distinguishes them.
+- P2-5: Full-segment control commands in `commands.py`:
+  `"stop listening"` / `"stop dictating"` → stop; `"delete that"` /
+  `"scratch that"` → backspace the previous paste. Dispatched in
+  `_on_speech_segment` before the output layer. `_last_output_length` is
+  updated after each paste in both streaming and batch. `new_line` /
+  `new_paragraph` stay as formatting commands (already covered by the existing
+  `FORMATTING_COMMANDS` layer — no separate control dispatch needed).
+
+Plan deviations (minor):
+- Control-command detection lives in `commands.py` (next to formatting
+  commands), not `output.py`. Output.py is about paste/type mechanics; commands
+  semantics fit alongside `apply_formatting_commands`.
+- `vocab_priority_filter` from the original Mode schema was dropped. The brain
+  helper has no priority-filter surface yet; adding one expanded scope.
+- Regression fix during execution: `app._return_to_idle` was a stub calling
+  itself (infinite recursion) from the P1 simplify pass. Fixed to inline
+  `end_session()` + `_set_tray_state("idle")`. This unblocks Esc-cancel and
+  stop-streaming code paths.
+
+**Pending (user)**: smoke test — cycle through modes via Ctrl+Shift+M and the
+overlay chip; dictate "this is a test stop listening" and verify the segment
+stops without pasting "stop listening"; dictate, then say "delete that" and
+verify the previous segment is backspaced; switch to Code mode and dictate —
+verify raw (unpunctuated) output, cloud polish bypassed (log shows
+`local-raw`).
+**Next**: new `/run` on this artifact to execute P3 (PySide6 visual port).
+
+---
 
 **2026-04-17 — Phase P1 complete (Win+H behavior parity on Tk)**
 Committed: (pending). Files changed: `recording_indicator.py` (major refactor),
@@ -432,27 +485,47 @@ Loaded from `config.yaml` `modes:` section (defaults if missing). Current mode p
 
 ## Resume Pack
 
-**Goal**: Reach Win+H feature parity on visibility model + click-mic + close behavior + voice commands, then exceed Win+H on visual polish via a PySide6 port with Mica/rounded/shadow/animated waveform. Three phases: P1 behavior parity on Tk (**done, awaiting smoke**), P2 modes + voice commands (1 session), P3 PySide6 visual port (2-3 sessions).
+**Goal**: Reach Win+H feature parity on visibility model + click-mic + close behavior + voice commands, then exceed Win+H on visual polish via a PySide6 port with Mica/rounded/shadow/animated waveform. Three phases: P1 behavior parity on Tk (**done, awaiting smoke**), P2 modes + voice commands (**done, awaiting smoke**), P3 PySide6 visual port (2-3 sessions).
 
-**Current state**: P1 implemented in code. `recording_indicator.py` exposes the always-visible API (`begin_session`/`end_session`/`dismiss`/`restore`/`toggle_visibility`/`is_dismissed`). `Recorder.cancel()` and `StreamingRecorder.cancel()` added (worker join is outside the lock). Tray has 4-state icons (`idle`/`listening`/`transcribing`/`blocked`) with a dynamic "Show/Hide overlay" entry. Config keys `ui.overlay_visible_on_start` and `ui.toggle_overlay_hotkey` live. Simplify pass cleaned up 4 `_noarg` wrappers, hoisted `_TRAY_STATE_TITLES`, added `_set_state`/`_return_to_idle` helpers, and swapped the audio-hot-path lambda for positional `after()` args.
+**Current state**: P1 + P2 implemented in code.
+- Overlay (`recording_indicator.py`): 230 px wide, mode chip click-to-cycle,
+  `refresh_mode()` public API, all P1 callbacks still live.
+- `modes.py`: `Mode` dataclass + `ModeManager` + `load_modes`.
+  Built-ins: Default, Email (polish addendum), Code (raw output, bypasses cloud
+  polish and formatting commands).
+- `commands.py`: `detect_control_command(text)` returns `"stop"` / `"delete"`
+  / `None` for full-segment matches.
+- `cascade_dictator.dictate` takes `user_mode=`; raw mode returns Whisper
+  transcript unchanged. Cloud path receives `polish_addendum` via
+  `build_cloud_system_prompt` (new rule 5, vocab renumbers to rule 6).
+- `app.py`: `ModeManager` initialized, `_cycle_mode` wired to Ctrl+Shift+M,
+  the overlay chip, the gear menu, and the tray menu.
+  `_dispatch_control_command` handles stop / delete. `_last_output_length`
+  is tracked in streaming and batch paths.
+- Regression fix: `_return_to_idle` was a self-recursing stub — now inlined.
 
-**Pending for P1 (user-side)**: run the 10-step smoke plan in §P1-6. Key watchpoints:
-- `WS_EX_NOACTIVATE`: click overlay mic while Notepad has focus — Notepad caret must stay, dictation must land in Notepad.
-- Esc passthrough: while idle, Esc must still reach target apps (we register `suppress=False`).
-- First-close toast: `notify_info` should fire exactly once per session when the user clicks the overlay's X.
-
-**What's ready for P2 (decided, not coded)**:
-- Voice commands: full-transcript match for 5 control commands in `output.py` + dispatch in `app._on_speech_segment`.
-- Modes: dataclass + JSON state file + cycle hotkey (Ctrl+Shift+M) + per-mode polish addendum.
+**Pending for P1+P2 (user-side smoke)**:
+- P1-6 10-step plan (unchanged).
+- Mode cycle via chip click, Ctrl+Shift+M, gear menu, and tray menu — all
+  four should advance and toast.
+- Dictate "this is a test stop listening" — first segment pastes, second
+  stops recording (no paste of "stop listening").
+- Dictate a phrase, wait for paste, then say "delete that" — last paste is
+  backspaced.
+- Switch to Code mode, dictate, verify raw output + log says `local-raw`.
+- Switch back to Default; Groq cloud path with polish should resume.
 
 **What's ready for P3 (decided, not coded)**:
-- PySide6 port: parallel `recording_indicator_qt.py` preserving the public API shipped in P1, `ui.overlay_backend` config flag.
+- PySide6 port: parallel `recording_indicator_qt.py` preserving the public API
+  shipped in P1+P2 (incl. `refresh_mode`), `ui.overlay_backend` config flag.
 
-**Next start command**: `/run docs/feature-lists/FEATURE_LIST_OVERLAY_OVERHAUL.md` (to execute P2).
+**Next start command**: `/run docs/feature-lists/FEATURE_LIST_OVERLAY_OVERHAUL.md` (to execute P3).
 
-**Remaining execution order**: P2-1 → P2-2 → P2-3 → P2-4 → P2-5 (one /run context). Then a new /run for P3.
+**Remaining execution order**: P3-1 → P3-2 → P3-3 → P3-4 (new /run context).
 
-**First files to touch in P2**: create `modes.py`; then extend `output.py` for full-segment command detection; then wire `app.py` and `recording_indicator.py` (mode chip).
+**First files to touch in P3**: `requirements.txt` (PySide6 + qframelesswindow),
+then parallel `recording_indicator_qt.py`, then `ui.overlay_backend` flag in
+`config.yaml` + `app.py`.
 
 ---
 

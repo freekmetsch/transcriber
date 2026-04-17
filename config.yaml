@@ -68,3 +68,17 @@ ui:
   show_language: true        # EN/NL badge on the text popup after each segment
   overlay_visible_on_start: true     # Always-visible pill (Win+H-style). false = start hidden.
   toggle_overlay_hotkey: ctrl+shift+h  # Show/hide the overlay (no-op if dismissed via tray)
+  cycle_mode_hotkey: ctrl+shift+m      # Cycle dictation modes (Default / Email / Code ...)
+
+# Dictation modes — omit or leave null to use built-ins (Default, Email, Code).
+# Schema per entry: { name, polish_prompt_addendum, output_format }.
+#   output_format: "default" (cloud polish + formatting commands)
+#                | "raw"     (skip cloud polish + skip formatting commands)
+# Example custom list:
+# modes:
+#   - name: Default
+#   - name: Email
+#     polish_prompt_addendum: "Format as a polite professional email body. Preserve the user's tone."
+#   - name: Code
+#     output_format: raw
+modes: null

@@ -22,7 +22,9 @@ import shortcut
 import sounds
 from cascade_dictator import CascadeDictator
 from cloud_dictator import OpenRouterDictator
+from commands import detect_control_command
 from config import load_config
+from modes import ModeManager, load_modes
 from recorder import Recorder, StreamingRecorder
 from transcriber import Transcriber
 from postprocessor import build_cloud_system_prompt, ollama_health_check
@@ -152,6 +154,17 @@ class TranscriberApp:
         self._last_toggle_time: float = 0.0
         self._target_hwnd: int = 0
         self._last_action_status: str = ""
+        self._last_output_length: int = 0
+
+        # Dictation modes (switchable polish profiles)
+        self._modes = ModeManager(
+            modes=load_modes(self.config.get("modes")),
+            state_path=Path(__file__).parent / "mode_state.json",
+        )
+        log.info(
+            "Modes: %s (current: %s)",
+            self._modes.names(), self._modes.current().name,
+        )
 
         # Streaming recorder (created if streaming enabled)
         self._streaming_enabled = self.config["streaming"]["enabled"]
@@ -189,6 +202,8 @@ class TranscriberApp:
             on_dismiss=self._on_overlay_dismiss,
             get_menu_items=self._build_overlay_menu_items,
             visible_on_start=self.config["ui"].get("overlay_visible_on_start", True),
+            get_mode_name=lambda: self._modes.current().name,
+            on_mode_click=self._cycle_mode,
         )
         self._recording_indicator.start()
 
@@ -342,7 +357,8 @@ class TranscriberApp:
 
     def _return_to_idle(self):
         """End the overlay session and reset the tray to idle."""
-        self._return_to_idle()
+        self._recording_indicator.end_session()
+        self._set_tray_state("idle")
 
     def _tray_tooltip(self) -> str:
         """Build tray icon tooltip with hotkey hint, vocab count, and last action."""
@@ -364,10 +380,42 @@ class TranscriberApp:
                 f"Press {toggle_hk} or use the tray menu to show it again",
             )
 
+    def _cycle_mode(self, icon=None, item=None):
+        """Advance to the next dictation mode, persist, and notify."""
+        new_mode = self._modes.cycle()
+        log.info("Mode cycled: %s", new_mode.name)
+        self._recording_indicator.refresh_mode()
+        notifications.notify_info("Mode", f"Switched to {new_mode.name}")
+
+    def _dispatch_control_command(self, command: str):
+        """Handle a full-segment voice control command from _on_speech_segment."""
+        if command == "stop":
+            log.info("Voice command: stop listening")
+            self._toggle_recording()
+            return
+        if command == "delete":
+            n = self._last_output_length
+            if n > 0:
+                for _ in range(n):
+                    keyboard.send("backspace")
+                log.info("Voice command: delete (backspaced %d chars)", n)
+            else:
+                log.debug("Voice command: delete — nothing to undo")
+            self._segment_context = ""
+            self._last_transcription = ""
+            self._last_output_length = 0
+            if self._recording:
+                self._set_state("listening")
+
     def _build_overlay_menu_items(self) -> list:
         """Build the overlay gear menu (mirrors tray menu, minus shortcut duplication)."""
+        cycle_hk = self.config["ui"].get("cycle_mode_hotkey", "ctrl+shift+m")
+        cycle_label = f"Cycle mode \u2192 {self._modes.current().name}"
+        if cycle_hk:
+            cycle_label += f"  ({cycle_hk})"
         items: list = [
             ("Hide overlay", self._recording_indicator.dismiss),
+            (cycle_label, self._cycle_mode),
             None,
         ]
         if self._brain is not None:
@@ -466,6 +514,7 @@ class TranscriberApp:
                 vocabulary_text=self._vocabulary_text,
                 previous_segment=self._segment_context,
                 initial_prompt=self._segment_context or self._initial_prompt or None,
+                user_mode=self._modes.current(),
             )
             result = result.strip()
             t_dictate = time.monotonic() - t_dictate
@@ -477,6 +526,12 @@ class TranscriberApp:
 
         if not result:
             self._set_state("listening")
+            return
+
+        # Full-segment voice control command takes priority over paste.
+        command = detect_control_command(result)
+        if command is not None:
+            self._dispatch_control_command(command)
             return
 
         t_total = time.monotonic() - t_start
@@ -496,6 +551,7 @@ class TranscriberApp:
         output_text_to_target(result, self._target_hwnd,
                               method=output_method, streaming=True)
 
+        self._last_output_length = len(result)
         self._segment_context = result.strip()
         self._last_transcription = result.strip()
         self._last_action_status = f"Dictated: {result.strip()[:40]}"
@@ -546,6 +602,7 @@ class TranscriberApp:
                 vocabulary_text=self._vocabulary_text,
                 previous_segment="",
                 initial_prompt=self._initial_prompt or None,
+                user_mode=self._modes.current(),
             )
             result = result.strip()
             t_dictate = time.monotonic() - t_dictate
@@ -560,6 +617,7 @@ class TranscriberApp:
                 self._last_action_status = f"Dictated: {result[:40]}"
                 output_method = self.config["ui"]["output_method"]
                 output_text_to_target(result, self._target_hwnd, method=output_method)
+                self._last_output_length = len(result)
 
                 self._recording_indicator.show_feedback("success")
                 time.sleep(0.4)
@@ -594,6 +652,15 @@ class TranscriberApp:
                 log.info("Overlay toggle hotkey registered: %s", toggle_hk)
             except Exception:
                 log.exception("Failed to register overlay toggle hotkey %s", toggle_hk)
+
+        # Mode cycle hotkey (Ctrl+Shift+M by default)
+        cycle_hk = self.config["ui"].get("cycle_mode_hotkey", "ctrl+shift+m")
+        if cycle_hk:
+            try:
+                keyboard.add_hotkey(cycle_hk, self._cycle_mode, suppress=True)
+                log.info("Mode cycle hotkey registered: %s", cycle_hk)
+            except Exception:
+                log.exception("Failed to register mode cycle hotkey %s", cycle_hk)
 
         # Esc cancels recording in-flight — suppress=False so Esc also reaches target apps
         try:
@@ -707,6 +774,11 @@ class TranscriberApp:
                 lambda item: "Show overlay" if self._recording_indicator.is_dismissed()
                              else "Hide overlay",
                 lambda icon, item: self._recording_indicator.toggle_visibility(),
+            ),
+            pystray.MenuItem(
+                lambda item: f"Mode: {self._modes.current().name}  "
+                             f"\u2192 next ({self.config['ui'].get('cycle_mode_hotkey', 'ctrl+shift+m')})",
+                self._cycle_mode,
             ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(

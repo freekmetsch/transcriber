@@ -13,6 +13,7 @@ recording indicator and per-segment timing log can label each result.
 import logging
 
 from cloud_dictator import CloudProvider, CloudUnavailable
+from modes import Mode
 from transcriber import Transcriber
 
 log = logging.getLogger("transcriber.cascade_dictator")
@@ -43,13 +44,28 @@ class CascadeDictator:
         vocabulary_text: str,
         previous_segment: str,
         initial_prompt: str | None,
+        user_mode: Mode | None = None,
     ) -> str:
+        raw_output = user_mode is not None and user_mode.output_format == "raw"
+
+        # Raw-output modes (e.g. Code): skip cloud polish + local formatting commands.
+        # Goes straight to Whisper and returns the verbatim transcript.
+        if raw_output:
+            raw = self._transcriber.transcribe(audio, initial_prompt=initial_prompt)
+            self.last_language = self._transcriber.last_language
+            self.last_language_probability = self._transcriber.last_language_probability
+            self.last_path = "local-raw"
+            return raw.strip()
+
+        polish_addendum = user_mode.polish_prompt_addendum if user_mode else ""
+
         if self._cloud is not None:
             try:
                 prompt = self._build_system_prompt(
                     vocabulary_text=vocabulary_text,
                     previous_segment=previous_segment,
                     mode=mode,
+                    polish_addendum=polish_addendum,
                 )
                 text = self._cloud.dictate(audio, system_prompt=prompt)
                 self.last_language = "en"

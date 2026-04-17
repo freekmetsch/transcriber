@@ -105,22 +105,30 @@ Rules:
 3. Convert formatting commands to symbols:
 {commands_block}
 4. Output ONLY the corrected text. No explanations, no commentary.\
-{vocabulary_block}{context_block}"""
+{addendum_block}{vocabulary_block}{context_block}"""
 
 
 def build_cloud_system_prompt(
     vocabulary_text: str = "",
     previous_segment: str = "",
     mode: str = "streaming",
+    polish_addendum: str = "",
 ) -> str:
-    """Build the system prompt sent to the OpenRouter audio-chat model.
+    """Build the system prompt sent to the cloud polish/audio-chat model.
 
-    Combines: transcription directive + formatting-command rules + personal
-    vocabulary + (streaming only) the previous segment's text as context.
+    Combines: transcription directive + formatting-command rules + optional
+    per-mode polish addendum + personal vocabulary + (streaming only) the
+    previous segment's text as context.
     """
+    if polish_addendum:
+        addendum_block = f"\n5. {polish_addendum}"
+        vocab_rule_number = 6
+    else:
+        addendum_block = ""
+        vocab_rule_number = 5
     if vocabulary_text:
         vocab_block = (
-            "\n5. The user has these custom vocabulary terms. "
+            f"\n{vocab_rule_number}. The user has these custom vocabulary terms. "
             "Prefer these exact spellings when the audio is ambiguous:\n"
             + vocabulary_text
         )
@@ -135,6 +143,7 @@ def build_cloud_system_prompt(
         context_block = ""
     return _CLOUD_PROMPT_TEMPLATE.format(
         commands_block=_COMMANDS_BLOCK,
+        addendum_block=addendum_block,
         vocabulary_block=vocab_block,
         context_block=context_block,
     )
