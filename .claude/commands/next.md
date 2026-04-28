@@ -66,4 +66,22 @@ Deliver a short handoff that includes:
 
 When invoked after a DEPTH CHECK, optimize for speed and truth over polish.
 
+## 6. Starter Prompt Block (Required — Always the Final Output)
+
+After the handoff, emit this as the absolute last element of the response.
+
+**PASTE TO START NEXT SESSION:**
+```
+Continue: [goal in one sentence]. Load [exact artifact path], then [exact first command or action].
+State: [current status in 1–2 sentences].
+[Only if a blocking question exists] Needs: [exact question].
+```
+
+Rules:
+- This fenced code block is the very last thing in your response. Nothing after it.
+- Maximum 4 lines inside the block.
+- Include the artifact path verbatim — next agent loads it cold with no prior context.
+- If no artifact exists, reference the relevant wiki page or `index.md` instead.
+- If the next action is a slash command, write it as `/command` (e.g. `/run`, `/plan`).
+
 **Related commands:** `/update` (broader doc maintenance) | `/done` (completion + commit and push handoff) | `/go` (resume execution)

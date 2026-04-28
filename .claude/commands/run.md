@@ -57,6 +57,22 @@ Execute `/done` §2-6. All `/done` verification, commit, and push behaviors appl
 5. Suggested next focus — top open item from the artifact, if any
 6. **Bottom line**: "Pipeline complete. Committed and pushed."
 
+**Starter Prompt Block (Required — Always the Final Output)**
+
+After the handoff summary, emit this as the absolute last element of the response:
+
+**PASTE TO START NEXT SESSION:**
+```
+[If remaining work in artifact]: Continue: [remaining goal]. Load [exact artifact path], then /run.
+[If fully complete, no remaining items]: Session complete. Run /plan for the next item.
+State: [one-sentence status — what shipped, what (if anything) remains].
+```
+
+Rules:
+- This fenced code block is the very last thing in your response. Nothing after it.
+- Maximum 3 lines inside the block. Pick the correct opening line (remaining work vs. complete).
+- Include the artifact path verbatim when work remains so the next agent loads it cold.
+
 ## 7. Depth Checkpoint
 
 If a DEPTH CHECK fires: finish the current subtask, then run §3-5 on whatever is complete. Leave remaining work active in the artifact with a resume pack. State what's done, what remains, exact `/run` restart point.
