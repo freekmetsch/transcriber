@@ -33,6 +33,12 @@ Skip only when scope is pure docs/copy (R0) with zero code change. State the rea
 
 Run inline — findings feed directly into §4 and §5.
 
+## 3.5. Stack Discipline (Conditional)
+
+When the plan introduces a new tool, library, service, or framework in a trigger category (auth, payments, observability, hosting, ORM/DB, real-time, caching, email, file storage, forms, styling, state mgmt, background jobs, data fetching, feature flags), follow `~/.claude/commands/__base-stack-discipline.md`.
+
+Findings from the protocol's Step 3 feed §4 Option Selection — recommended tools become the chosen-approach justifications, rejected alternatives become the rejected-alternatives entries. Skip when no trigger category is touched; state the skip reason in one line.
+
 ## 4. Option Selection — Sustainability First
 
 Execute `/3h` §4-6, but **auto-select the best option — do not present options neutrally and wait.**
@@ -82,5 +88,14 @@ Concise summary only — the plan lives in the artifact:
 4. Harden findings summary (if audit ran)
 5. Open questions (if any)
 6. **Bottom line**: "Plan ready at `[artifact path]`. Start a new context and run `/run`."
+
+## 9. Starter Prompt Block (Required — Always the Final Output)
+
+Emit per the **Starter Prompt Block (Universal Spec)** in `__common.md` (user-level). Specifics for `/plan`:
+
+- `Continue:` line — `Execute plan [name].` + `Load [exact artifact path], then /run.`
+- `State:` line — one sentence on what the plan covers + risk tier.
+- `Decisions still open` — copy every entry from the artifact's `## Open Questions` section into this sub-block, one line per question, options slash-separated. Each line starts with the question in plain words, then `— pick:` then options. Include the recommended default as the **first** option so the user can keep it by deleting the others.
+- `Needs:` line — only if a NO-GO blocker exists that prevents `/run` from starting at all.
 
 **Related:** `/run` (execute) | `/3h` (standalone planning) | `/critique` (standalone stress-test) | `/list` (standalone intake)
