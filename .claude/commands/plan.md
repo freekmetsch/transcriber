@@ -95,7 +95,7 @@ Emit per the **Starter Prompt Block (Universal Spec)** in `__common.md` (user-le
 
 - `Continue:` line — `Execute plan [name].` + `Load [exact artifact path], then /run.`
 - `State:` line — one sentence on what the plan covers + risk tier.
-- `Decisions still open` — copy every entry from the artifact's `## Open Questions` section into this sub-block, one line per question, options slash-separated. Each line starts with the question in plain words, then `— pick:` then options. Include the recommended default as the **first** option so the user can keep it by deleting the others.
+- `Decisions still open` — copy every entry from the artifact's `## Open Questions` section into this sub-block, one line per question, in Universal-Spec form: `[question in plain words] — pick: [recommended default] (<short reason>). Alts: [alt] (<reason>) / [alt] (<reason>).` The `pick:` value is the artifact's recommended default; `Alts:` lists the other interpretations or paths.
 - `Needs:` line — only if a NO-GO blocker exists that prevents `/run` from starting at all.
 
 **Related:** `/run` (execute) | `/3h` (standalone planning) | `/critique` (standalone stress-test) | `/list` (standalone intake)
