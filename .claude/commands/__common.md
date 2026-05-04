@@ -4,15 +4,15 @@ description: Shared context for all workflows - agent reads this once per sessio
 
 # Common Context
 
+**Repo type:** Desktop app
+
 ## Your Role
 AI-first software engineer. Optimize for model reasoning, regeneration, and debugging.
 
-## Communication Style
-- Plain language, short sentences. Define jargon inline on first use.
-- Decision-critical context fully in chat — no required doc lookup.
-- When requesting a decision: tradeoffs, recommendation based on gold standards best practices (absolutely no technical debt), explicit reply choices.
-- Concise synthesis first; deeper detail only where risk/impact requires it.
-- Assume self-taught solo Windows vibe-coder: agent executes code; user approves decisions and pushes.
+## Communication
+
+> Communication, decision, research, formatting, and policy rules: see global `~/.claude/commands/__common.md` (§Decision Filter, §Default Stance, §Universal Policies, §Unified Decision Communication Contract, §Research Discipline, §Self-Install Policy, §Formatting Conventions, §Starter Prompt Block).
+> Repo-specific deltas below override only the listed item, not the structure.
 
 ## Project Stack
 - **Language**: Python 3.12
@@ -91,40 +91,13 @@ Default state for unfinished work is active, not backlog.
 - Context pressure, session pauses, or partial progress are not by themselves reasons to backlog work.
 - When pausing unfinished work, keep the artifact active and use `/next` or a concise in-place handoff.
 
-## Unified Decision Communication Contract (Default for all workflows)
-Every workflow response must use one of these two modes. Keep style scannable and decision-ready.
+## Stack Discipline (Tool / Library / Service Selection)
 
-### Mode: Decision Required
-Use this when user input is required (approval gate, option selection, or a scope or risk-tier choice).
+When a workflow introduces a new tool, library, service, or framework, follow the Stack Discipline Protocol at `~/.claude/commands/__base-stack-discipline.md`.
 
-Required sections:
-1. **Decision Needed Now** (dominant callout; strongest emphasis in message).
-2. **Recommended Option** (state option number and recommendation in one clear line).
-3. **Options** table (2-3 options, columns: Choice, Upside, Tradeoff, Risk/Cost, Best When).
-4. **Why this recommendation** (explicit basis from codebase facts + best-practice guidance + risk reasoning).
-5. **What I need from you now** (exact reply format: `Reply 1`, `Reply 2`, or `Reply 3`).
+The protocol fires on its trigger categories (auth, payments, observability, hosting, ORM/DB, real-time, caching, email, file storage, forms, styling, state mgmt, background jobs, data fetching, feature flags). If uncertain whether a task touches a trigger category, run the protocol — skipping requires confidence the task is outside all categories.
 
-### Mode: No Decision Needed
-Use this for progress/status updates where no immediate user choice is required.
-
-Required sections:
-1. **No Decision Needed** (dominant callout; strongest emphasis in message).
-2. **What changed** (synthesized progress only).
-3. **What to watch** (risks/watchpoints that may require future choice).
-4. **Next checkpoint** (what happens next and when user input is expected).
-
-Global: one dominant callout per response. Prioritize what changes a decision, not laundry lists.
-
-## Context7 (Mandatory for External APIs)
-Use `#context7` for all framework/library documentation. Do not rely on model knowledge for technical specifics.
-
-Protocol:
-1. `resolve-library-id` for each package/framework.
-2. `query-docs` with the resolved ID.
-3. Cite what was verified and why it matters.
-
-Exceptions:
-- `/done`: reuse prior evidence; fresh lookup only if a claim depends on unresolved external API behavior.
+Established preferences in `C:\Users\metsc\.claude\projects\C--Users-metsc-Cloned-Repositories-second-brain\memory\MEMORY.md` are defaults, not absolutes — verify use-case fit before applying. Reference: Paddle MOR is the sub-payments default, but Mollie was chosen for tips on `pro-social-tools` because the use case differs.
 
 ## Risk Tiers
 | Tier | Scope | Required Controls |
@@ -163,10 +136,3 @@ Project skills in `.claude/skills/` — MUST be consulted when working in that a
 - Do not create extra planning artifacts unless blocked.
 - Do not perform broad context reloads when scope is already clear.
 - Keep progress updates short and action-oriented.
-
-## Context Budget
-Estimate cost before starting: **S** (single-file) | **M** (multi-file) | **L** (cross-cutting) | **XL** (architecture, must split sessions).
-
-1. **20% used**: plan remaining work. Split L+ into checkpointable chunks.
-2. **40% used**: finish current subtask, run `/next` or leave a concise in-place handoff on the active artifact, then wrap up.
-3. Target: never exceed 60%.
