@@ -78,7 +78,6 @@ Canonical definitions: `.claude/commands/*.md`. Local wrappers must not override
 - `/3h`: execution-ready phased plan.
 - `/critique`: stress-test a plan; no execution.
 - `/diag`: investigate root cause; no execution.
-- `/go`: execute approved scope only.
 - `/done`: verify, commit, and push.
 - `/harden`: production-readiness audit; no execution.
 - `/next`: session wrap-up and handoff for next chat.

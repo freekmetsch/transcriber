@@ -74,6 +74,6 @@ Deliver this decision brief in `Decision Required` mode with explicit option tra
 
 ## 6. Hard Stop
 
-Do not execute. Wait for `/go`.
+Do not execute. Wait for `/run`.
 
-**Related:** `/critique` (stress-test plan) | `/go` (execute) | `/diag` (investigate specific finding)
+**Related:** `/critique` (stress-test plan) | `/run` (execute) | `/diag` (investigate specific finding)
