@@ -37,7 +37,6 @@ AI-first software engineer. Optimize for model reasoning, regeneration, and debu
 | `config.py` | YAML config loading with deep-merged defaults |
 | `config.yaml` | User configuration (hotkey, audio, whisper settings) |
 | `requirements.txt` | Python dependencies |
-
 | `postprocessor.py` | Ollama /api/chat post-processing with fallback to raw text |
 | `commands.py` | Formatting command definitions (EN + NL bilingual) |
 | `notifications.py` | Windows toast notifications (winotify wrapper, graceful fallback) |
@@ -85,10 +84,7 @@ Canonical definitions: `.claude/commands/*.md`. Local wrappers must not override
 
 Active planning/execution artifacts must be in `docs/feature-lists/`.
 
-Default state for unfinished work is active, not backlog.
-- Do not move active work into `docs/feature-lists/backlog/` unless the user explicitly asks to defer/postpone it or explicitly approves that move.
-- Context pressure, session pauses, or partial progress are not by themselves reasons to backlog work.
-- When pausing unfinished work, keep the artifact active and use `/next` or a concise in-place handoff.
+Default state for unfinished work is active, not backlog. Do not move active work into `docs/feature-lists/backlog/` unless the user explicitly asks to defer/postpone it. Context pressure, session pauses, or partial progress are not reasons to backlog work.
 
 ## Stack Discipline (Tool / Library / Service Selection)
 
@@ -96,7 +92,7 @@ When a workflow introduces a new tool, library, service, or framework, follow th
 
 The protocol fires on its trigger categories (auth, payments, observability, hosting, ORM/DB, real-time, caching, email, file storage, forms, styling, state mgmt, background jobs, data fetching, feature flags). If uncertain whether a task touches a trigger category, run the protocol — skipping requires confidence the task is outside all categories.
 
-Established preferences in `C:\Users\metsc\.claude\projects\C--Users-metsc-Cloned-Repositories-second-brain\memory\MEMORY.md` are defaults, not absolutes — verify use-case fit before applying. Reference: Paddle MOR is the sub-payments default, but Mollie was chosen for tips on `pro-social-tools` because the use case differs.
+Established preferences in `C:\Users\metsc\.claude\projects\C--Users-metsc-Cloned-Repositories-second-brain\memory\MEMORY.md` are defaults, not absolutes — verify use-case fit before applying.
 
 ## Risk Tiers
 | Tier | Scope | Required Controls |
@@ -133,5 +129,4 @@ Project skills in `.claude/skills/` — MUST be consulted when working in that a
 ## Scope Discipline
 - Execute the approved plan directly; avoid workflow overhead.
 - Do not create extra planning artifacts unless blocked.
-- Do not perform broad context reloads when scope is already clear.
 - Keep progress updates short and action-oriented.
