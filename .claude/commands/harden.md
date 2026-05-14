@@ -64,7 +64,7 @@ Include summary: totals by severity, by dimension, and highest-risk areas.
 ## 5. Hardening Plan
 
 Group findings into phases by severity: P0 → P1 → P2 → P3 (optional, but recommended for large audits).
-Use `/3h` conventions for phasing, ticket schema, and context-window strategy.
+Use `~/.claude/commands/__base-planning.md` conventions for phasing, ticket schema, and context-window strategy.
 
 Output artifact: `docs/feature-lists/FEATURE_LIST_HARDEN_[AREA].md`
 Use `PRODUCTION_READINESS` as area for full-app audits.

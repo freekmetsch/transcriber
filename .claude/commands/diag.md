@@ -165,4 +165,4 @@ Provide:
 
 Wait for explicit instruction to execute (`/go`).
 
-**Related commands:** `/go` (execute chosen fix) | `/critique` (review implementation plan first) | `/3h` (broader planning)
+**Related commands:** `/go` (execute chosen fix) | `/critique` (review implementation plan first) | `/plan` (broader planning)

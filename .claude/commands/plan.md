@@ -4,7 +4,7 @@ description: Full planning workflow — intake, discovery, harden audit, sustain
 
 > See `.claude/commands/__common.md` for shared context.
 
-Orchestrates `/list` → `/3h` → `/harden` → `/critique` → resume pack into one uninterrupted flow.
+Orchestrates `/list` → planning (via `~/.claude/commands/__base-planning.md`) → `/harden` → `/critique` → resume pack into one uninterrupted flow.
 
 Goal: produce an execution-ready feature list artifact with a resume pack. The next context window runs `/run`.
 
@@ -16,11 +16,13 @@ Default `No Decision Needed`. Switch to `Decision Required` **only** at optional
 
 ## 1. Intake
 
+**First: read recent git commits.** Run `git log --oneline -10` before anything else. Note what shipped recently — this orients scope, avoids re-planning already-done work, and surfaces state assumptions that matter for the plan.
+
 Execute `/list` §1-2: detect input mode, read raw input without restructuring, preserve user intent.
 
 ## 2. Intent Brief + Discovery
 
-Execute `/3h` §2-3 silently (do not present as a checkpoint):
+Execute `~/.claude/commands/__base-planning.md` §2-3 silently (do not present as a checkpoint):
 - Build intent brief: objective, constraints, success criteria, scope boundaries.
 - Map touched files, reusable patterns, and true gaps.
 - Use Context7 for all external framework/library behaviors.
@@ -41,7 +43,7 @@ Findings from the protocol's Step 3 feed §4 Option Selection — recommended to
 
 ## 4. Option Selection — Sustainability First
 
-Execute `/3h` §4-6, but **auto-select the best option — do not present options neutrally and wait.**
+Execute `~/.claude/commands/__base-planning.md` §4-6, but **auto-select the best option — do not present options neutrally and wait.**
 
 Tiebreaker (in order):
 1. Sustainability — least technical debt, most maintainable long-term
@@ -67,9 +69,9 @@ Do not pause for routine scope confirmation, option selection, or risk acknowled
 
 ## 6. Plan Artifact
 
-Execute `/3h` §9 to create or update `docs/feature-lists/FEATURE_LIST_[NAME].md`.
+Execute `~/.claude/commands/__base-planning.md` §9 to create or update `docs/feature-lists/FEATURE_LIST_[NAME].md`.
 
-Required sections: problem framing, scope, chosen approach + rejected alternatives, phase plan with context-window strategy, execution tickets (full schema per `/3h` §8), risk tier and verification matrix, failure modes and mitigations.
+Required sections: problem framing, scope, chosen approach + rejected alternatives, phase plan with context-window strategy, execution tickets (full schema per `__base-planning.md` §8), risk tier and verification matrix, failure modes and mitigations.
 
 Execute `/next` §2-3 to bake a resume pack into the artifact end:
 - Goal, current state, first command (`/run`), first files, pending verification, open questions.
@@ -98,4 +100,4 @@ Emit per the **Starter Prompt Block (Universal Spec)** in `__common.md` (user-le
 - `Decisions still open` — copy every entry from the artifact's `## Open Questions` section into this sub-block, one line per question, in Universal-Spec form: `[question in plain words] — pick: [recommended default] (<short reason>). Alts: [alt] (<reason>) / [alt] (<reason>).` The `pick:` value is the artifact's recommended default; `Alts:` lists the other interpretations or paths.
 - `Needs:` line — only if a NO-GO blocker exists that prevents `/run` from starting at all.
 
-**Related:** `/run` (execute) | `/3h` (standalone planning) | `/critique` (standalone stress-test) | `/list` (standalone intake)
+**Related:** `/run` (execute) | `/critique` (standalone stress-test) | `/list` (standalone intake)

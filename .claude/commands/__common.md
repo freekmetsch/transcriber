@@ -74,7 +74,6 @@ Canonical definitions: `.claude/commands/*.md`. Local wrappers must not override
 
 ### Granular workflows (available for targeted use)
 - `/list`: intake and structure broad ideas.
-- `/3h`: execution-ready phased plan.
 - `/critique`: stress-test a plan; no execution.
 - `/diag`: investigate root cause; no execution.
 - `/done`: verify, commit, and push.
