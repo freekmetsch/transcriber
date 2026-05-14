@@ -75,7 +75,6 @@ Canonical definitions: `.claude/commands/*.md`. Local wrappers must not override
 ### Granular workflows (available for targeted use)
 - `/list`: intake and structure broad ideas.
 - `/critique`: stress-test a plan; no execution.
-- `/diag`: investigate root cause; no execution.
 - `/done`: verify, commit, and push.
 - `/harden`: production-readiness audit; no execution.
 - `/next`: session wrap-up and handoff for next chat.
@@ -121,7 +120,7 @@ Project skills in `.claude/skills/` — MUST be consulted when working in that a
 - `python-dev-patterns`: Debugging discipline, testing anti-patterns, root-cause investigation.
 
 ## Issue Management
-- Issue files: `docs/known_issues/current/`. Template and lifecycle: see `/diag`.
+- Issue files: `docs/known_issues/current/`. Template and lifecycle: see `~/.claude/commands/__base-diag.md` §Issue Template (library sourced by `/plan` in fix-mode).
 - Only mark RESOLVED after explicit user confirmation, then move to `solved/`.
 - For AWAITING VERIFICATION, check in with user before moving.
 

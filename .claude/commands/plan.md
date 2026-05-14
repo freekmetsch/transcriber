@@ -27,6 +27,30 @@ Execute `~/.claude/commands/__base-planning.md` §2-3 silently (do not present a
 - Map touched files, reusable patterns, and true gaps.
 - Use Context7 for all external framework/library behaviors.
 
+## 2a. Fix-Mode Discovery (when input is bug / drift / regression)
+
+If the input is a bug, drift, or regression — not a new feature or refactor — source `~/.claude/commands/__base-diag.md` before optioning. Apply the transcriber-specific overrides below in addition to the base library.
+
+### §4 Evidence matrix
+
+- Config state: env vars present/missing, provider selection.
+- Data state: vault empty/populated, malformed markdown, missing folders.
+- Environment: local/Docker, Windows/Linux, Python version.
+- Timeline/regression window: what changed and when.
+- Trace lineage (use `docs/FLOW.md` if its `Last verified` is current): caller → callee (e.g., `bot.py → processor.py → vault.py`).
+- Trace lateral: similar working code paths vs failing path.
+
+### §5 User-in-the-loop checks
+
+- What Telegram shows vs what the bot logs.
+- Docker logs vs local run behavior.
+- Specific message types that trigger vs don't trigger the issue.
+- Edge cases (voice vs text, Dutch vs English, very long input, empty input).
+
+### §6 Logging example
+
+`logging.debug('[DIAG-LOG] processor: classification result', extra={'input': text, 'result': result})`
+
 ## 3. Harden Audit
 
 Execute `/harden` §2-3 on the scope.

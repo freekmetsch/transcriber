@@ -76,4 +76,4 @@ Deliver this decision brief in `Decision Required` mode with explicit option tra
 
 Do not execute. Wait for `/run`.
 
-**Related:** `/critique` (stress-test plan) | `/run` (execute) | `/diag` (investigate specific finding)
+**Related:** `/critique` (stress-test plan) | `/run` (execute) | `/plan` (fix-mode for specific finding, sources `__base-diag.md` library)
