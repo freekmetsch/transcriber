@@ -46,6 +46,10 @@ _Avoid_: Client, buyer, account
 - **Group terms under subheadings** when natural clusters emerge. If all terms belong to a single cohesive area, a flat list is fine.
 - **Write an example dialogue.** A conversation between a dev and a domain expert that demonstrates how the terms interact naturally and clarifies boundaries between related concepts.
 
+## Append-section variant (overlay-driven)
+
+When the repo's `.claude/grill-flavor.md` sets `glossary_format: append-section`, the skill appends resolved terms under a named heading in an existing rich `CONTEXT.md` instead of treating the whole file as the canonical structure above. Use this when `CONTEXT.md` already hosts meta-content (folder semantics, workflow notes, project glossary mixed) and only one specific section should receive grill output. The structure rules above still apply within that section; the rest of the file is read-only to the skill.
+
 ## Single vs multi-context repos
 
 **Single context (most repos):** One `CONTEXT.md` at the repo root.

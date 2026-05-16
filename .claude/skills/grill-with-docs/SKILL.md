@@ -7,13 +7,41 @@ description: Grilling session that challenges your plan against the existing dom
 
 Interview me relentlessly about every aspect of this plan until we reach a shared understanding. Walk down each branch of the design tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
 
-Ask the questions one at a time, waiting for feedback on each question before continuing.
+Always ask questions via the `AskUserQuestion` tool — one question per call, never as plain chat text. Provide concrete answer options the user can pick from, with your recommended answer first and labelled `(Recommended)`. Wait for the user's selection before moving to the next question.
 
 If a question can be answered by exploring the codebase, explore the codebase instead.
 
 </what-to-do>
 
 <supporting-info>
+
+## Per-repo flavor overlay
+
+If `.claude/grill-flavor.md` exists at the repo root, read it before grilling starts. The overlay carries two things:
+
+1. **YAML frontmatter** — routes glossary writes and decision records to repo-specific locations and formats.
+2. **Free-form body** — additional grilling context (audience, tone, vocab hints) injected into the session.
+
+### Frontmatter schema
+
+| Key | Default | Values |
+|---|---|---|
+| `glossary_path` | `CONTEXT.md` | any path |
+| `glossary_format` | `pocock` | `pocock` \| `append-section` \| `custom` |
+| `glossary_section` | (n/a) | heading text, required when `glossary_format: append-section` |
+| `decision_path` | `docs/adr/` | any path, or `none` |
+| `decision_format` | `pocock-adr` | `pocock-adr` \| `wiki-concepts` \| `none` |
+
+### Format behaviors
+
+- `glossary_format: pocock` — standard [CONTEXT-FORMAT.md](./CONTEXT-FORMAT.md). Create file lazily on first term.
+- `glossary_format: append-section` — append resolved terms under the named `glossary_section` heading in the existing file. Do NOT overwrite or reformat other sections. Use for rich pre-existing CONTEXT.md files that already host meta-content.
+- `glossary_format: custom` — read the overlay body for the exact format the repo wants.
+- `decision_format: pocock-adr` — standard [ADR-FORMAT.md](./ADR-FORMAT.md) flow.
+- `decision_format: wiki-concepts` — replace the "offer to create an ADR" flow with "offer to create a `<decision_path>/<slug>.md` page". Skip the 3-trigger ADR test; use the repo's own discipline for what becomes a concept page.
+- `decision_format: none` (or `decision_path: none`) — never offer decision records in this repo.
+
+If no `.claude/grill-flavor.md` exists, default behavior applies (Pocock-canonical glossary + ADR flow).
 
 ## Domain awareness
 

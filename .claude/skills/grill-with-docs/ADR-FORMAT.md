@@ -26,6 +26,13 @@ Only include these when they add genuine value. Most ADRs won't need them.
 
 Scan `docs/adr/` for the highest existing number and increment by one.
 
+## Alternative decision routes (overlay-driven)
+
+When the repo's `.claude/grill-flavor.md` sets `decision_format` to something other than `pocock-adr`, the skill routes hard-to-reverse decisions elsewhere:
+
+- `decision_format: wiki-concepts` — offer to create a `<decision_path>/<slug>.md` page (e.g., a `wiki/concepts/<slug>.md` in a PKM repo). The repo's own discipline for what becomes a concept page replaces the 3-trigger ADR test below; the agent should still surface the rationale in the page body so future readers see *why*.
+- `decision_format: none` (or `decision_path: none`) — never offer decision records. Use for repos where the project itself is the decision record (e.g., a static personal site).
+
 ## When to offer an ADR
 
 All three of these must be true:
