@@ -107,13 +107,9 @@ End the artifact with `## Open Questions`. Each question must include a recommen
 
 ## 8. Output in Chat
 
-Concise summary only — the plan lives in the artifact:
-1. What the plan covers (1-2 lines)
-2. Chosen approach and why (2-3 lines)
-3. Key risks and mitigations (2-3 lines)
-4. Harden findings summary (if audit ran)
-5. Open questions (if any)
-6. **Bottom line**: "Plan ready at `[artifact path]`. Start a new context and run `/run`."
+Follow `~/.claude/commands/__common.md` §Unified Decision Communication Contract. Default mode `No Decision Needed`: headline + artifact links + Starter Prompt Block (§9). Nothing else.
+
+**Banned in chat:** prose summary of the plan body; `Plan written. Summary:` / `To recap:` / `Here's what I did:` preambles; section-by-section rundown of plan coverage, chosen approach, risks, or audit findings. Those live in the artifact.
 
 ## 9. Starter Prompt Block (Required — Always the Final Output)
 
