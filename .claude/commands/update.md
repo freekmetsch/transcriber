@@ -42,4 +42,5 @@ When invoked after a DEPTH CHECK (soft or hard), include in the feature list upd
 - Do not backlog work solely because a DEPTH CHECK fired.
 
 ## Output in chat
-The skill was likely called at the end of a work session, so output relevant information that a user has to act on (decisions, test results in clear non-jargon language, tradeoffs, recommended next steps)
+
+Per `~/.claude/commands/__common.md` §Unified Decision Communication Contract — headline + artifact links + Starter Prompt Block. Decisions in Universal Spec form (3-line emoji-anchored).
