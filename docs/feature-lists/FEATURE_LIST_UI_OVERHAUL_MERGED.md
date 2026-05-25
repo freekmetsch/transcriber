@@ -1,7 +1,8 @@
 # Feature List: UI + Overlay — Merged Remaining Work
 
+_Status: In flight — 2026-04-17 (Q1+Q2 shipped; Q3/Q4 open)_
+
 Date: 2026-04-17
-Status: In progress — Q1-1…Q1-4, Q2-1…Q2-5 shipped 2026-04-17 (Q1-4 lands the hover-expand panel Q2-4 was gated on)
 Open phases: Q3, Q4
 Scope: All not-yet-shipped features from `FEATURE_LIST_UI_OVERHAUL.md` (2026-04-15)
   and `FEATURE_LIST_OVERLAY_OVERHAUL.md` (2026-04-17)

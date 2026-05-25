@@ -1,7 +1,8 @@
 # Feature List: Desktop Remaining Work
 
+_Status: In flight — 2026-05-25 (Phases 1-3 done; Phase 3.5 + 5A-5D open)_
+
 Date: 2026-04-15
-Status: Active
 Scope: Everything left to build on the Windows desktop before moving to Android
 Owner: Freek
 

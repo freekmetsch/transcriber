@@ -1,7 +1,8 @@
 # Feature List: Personal Transcriber — Cross-Platform Voice-to-Text
 
+_Status: In flight — 2026-05-25 (Phase 3.5 complete; desktop polish + Android + sync open)_
+
 Date: 2026-04-15
-Status: In Progress (Phase 3.5 complete)
 Scope: Windows desktop app + Android voice input service + shared vocabulary brain
 Owner: Freek
 
