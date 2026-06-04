@@ -2,37 +2,16 @@
 description: Full planning workflow — intake, discovery, harden audit, sustainable option selection, critique, and execution-ready handoff
 ---
 
-> See `.claude/commands/__common.md` for shared context.
+> See `.claude/commands/__common.md` for repo context.
+> Base: `C:\Users\metsc\.claude\commands\__base-plan.md` — read and apply first.
 
-Orchestrates `/list` → planning (via `~/.claude/commands/__base-planning.md`) → `/harden` → `/critique` → resume pack into one uninterrupted flow.
+## Repo Overrides
 
-Goal: produce an execution-ready feature list artifact with a resume pack. The next context window runs `/run`.
+### §2a Fix-Mode Discovery
 
-**Do not implement code. Do not present intermediate work and ask "is this what you want?" Run to completion, then present the finished plan.**
+Source `~/.claude/commands/__base-diag.md` before optioning. Apply these transcriber overrides on top:
 
-## 0. Communication Mode
-
-Default `No Decision Needed`. Switch to `Decision Required` **only** at optional gates (§5).
-
-## 1. Intake
-
-**First: read recent git commits.** Run `git log --oneline -10` before anything else. Note what shipped recently — this orients scope, avoids re-planning already-done work, and surfaces state assumptions that matter for the plan.
-
-Execute `/list` §1-2: detect input mode, read raw input without restructuring, preserve user intent.
-
-## 2. Intent Brief + Discovery
-
-Execute `~/.claude/commands/__base-planning.md` §2-3 silently (do not present as a checkpoint):
-- Build intent brief: objective, constraints, success criteria, scope boundaries.
-- Map touched files, reusable patterns, and true gaps.
-- Use Context7 for all external framework/library behaviors.
-
-## 2a. Fix-Mode Discovery (when input is bug / drift / regression)
-
-If the input is a bug, drift, or regression — not a new feature or refactor — source `~/.claude/commands/__base-diag.md` before optioning. Apply the transcriber-specific overrides below in addition to the base library.
-
-### §4 Evidence matrix
-
+**§4 Evidence matrix**
 - Config state: env vars present/missing, provider selection.
 - Data state: vault empty/populated, malformed markdown, missing folders.
 - Environment: local/Docker, Windows/Linux, Python version.
@@ -40,84 +19,22 @@ If the input is a bug, drift, or regression — not a new feature or refactor �
 - Trace lineage (use `docs/FLOW.md` if its `Last verified` is current): caller → callee (e.g., `bot.py → processor.py → vault.py`).
 - Trace lateral: similar working code paths vs failing path.
 
-### §5 User-in-the-loop checks
-
+**§5 User-in-the-loop checks**
 - What Telegram shows vs what the bot logs.
 - Docker logs vs local run behavior.
 - Specific message types that trigger vs don't trigger the issue.
 - Edge cases (voice vs text, Dutch vs English, very long input, empty input).
 
-### §6 Logging example
-
+**§6 Logging example**
 `logging.debug('[DIAG-LOG] processor: classification result', extra={'input': text, 'result': result})`
 
-## 3. Harden Audit
+### §3 Audits — the audit table for this repo
 
-Execute `/harden` §2-3 on the scope.
+- **Harden** — execute `/harden` §2-3 on the scope. Skip only when scope is pure docs/copy (R0) with zero code change; state the reason.
+- **Stack Discipline** (conditional) — when the plan introduces a new tool/library/service/framework in a trigger category (auth, payments, observability, hosting, ORM/DB, real-time, caching, email, file storage, forms, styling, state mgmt, background jobs, data fetching, feature flags), follow `~/.claude/commands/__base-stack-discipline.md`. Recommended tools become chosen-approach justifications; rejected alternatives become rejected-alternatives entries. Skip when no trigger category is touched; state the skip reason.
 
-Skip only when scope is pure docs/copy (R0) with zero code change. State the reason if skipping.
+Run inline — findings feed option selection and critique.
 
-Run inline — findings feed directly into §4 and §5.
+### §4 Option Selection — tiebreaker
 
-## 3.5. Stack Discipline (Conditional)
-
-When the plan introduces a new tool, library, service, or framework in a trigger category (auth, payments, observability, hosting, ORM/DB, real-time, caching, email, file storage, forms, styling, state mgmt, background jobs, data fetching, feature flags), follow `~/.claude/commands/__base-stack-discipline.md`.
-
-Findings from the protocol's Step 3 feed §4 Option Selection — recommended tools become the chosen-approach justifications, rejected alternatives become the rejected-alternatives entries. Skip when no trigger category is touched; state the skip reason in one line.
-
-## 4. Option Selection — Sustainability First
-
-Execute `~/.claude/commands/__base-planning.md` §4-6, but **auto-select the best option — do not present options neutrally and wait.**
-
-Tiebreaker (in order):
-1. Sustainability — least technical debt, most maintainable long-term
-2. Idiomatic Python — modern patterns for the stack (async, Pydantic, PTB v20+)
-3. Architectural fit — works with what exists
-4. Scope efficiency — no unnecessary bloat
-
-If a refactor is more sustainable than a patch, **recommend the refactor**. Quick-fix approaches must be listed as rejected alternatives with explicit debt reasoning.
-
-Include in plan: chosen approach + why, rejected alternatives + why rejected (1-2 lines each).
-
-## 5. Critique
-
-Execute `/critique` §1-2 on the selected approach. Build the failure-mode table. Integrate mitigations directly into the plan.
-
-### Gates — Zero Mandatory Stops
-
-This workflow runs to completion. Pause with `Decision Required` **only** for:
-- **Interpretation conflict**: two plausible readings leading to fundamentally different architectures.
-- **NO-GO condition**: critique surfaces an unresolved blocker that cannot be safely defaulted.
-
-Do not pause for routine scope confirmation, option selection, or risk acknowledgment.
-
-## 6. Plan Artifact
-
-Execute `~/.claude/commands/__base-planning.md` §9 to create or update `docs/feature-lists/FEATURE_LIST_[NAME].md`.
-
-Required sections: problem framing, scope, chosen approach + rejected alternatives, phase plan with context-window strategy, execution tickets (full schema per `__base-planning.md` §8), risk tier and verification matrix, failure modes and mitigations.
-
-Execute `/next` §2-3 to bake a resume pack into the artifact end:
-- Goal, current state, first command (`/run`), first files, pending verification, open questions.
-
-## 7. Open Questions
-
-End the artifact with `## Open Questions`. Each question must include a recommended default so `/run` can proceed without waiting:
-> **Q: [question]** — Default: [action if unanswered]. Reason: [why this matters].
-
-## 8. Output in Chat
-
-Follow `~/.claude/commands/__common.md` §Unified Decision Communication Contract. Default mode `No Decision Needed`: headline + artifact links + Starter Prompt Block (§9). Nothing else.
-
-**Banned in chat:** prose summary of the plan body; `Plan written. Summary:` / `To recap:` / `Here's what I did:` preambles; section-by-section rundown of plan coverage, chosen approach, risks, or audit findings. Those live in the artifact.
-
-## 9. Starter Prompt Block (Required — Always the Final Output)
-
-Emit per the **Starter Prompt Block (Universal Spec)** in `__common.md` (user-level). Specifics for `/plan`:
-
-- `Continue:` line — `Execute plan [name].` + `Load [exact artifact path], then /run.`
-- `State:` line — one sentence on what the plan covers + risk tier.
-- `Decisions still open` — copy every entry from the artifact's `## Open Questions` section into this sub-block, one line per question, in Universal-Spec form: `[question in plain words] — pick: [recommended default] (<short reason>). Alts: [alt] (<reason>) / [alt] (<reason>).` The `pick:` value is the artifact's recommended default; `Alts:` lists the other interpretations or paths.
-- `Needs:` line — only if a NO-GO blocker exists that prevents `/run` from starting at all.
-
-**Related:** `/run` (execute) | `/critique` (standalone stress-test) | `/list` (standalone intake)
+Point 2 = Idiomatic Python — modern patterns for the stack (async, Pydantic, PTB v20+).
