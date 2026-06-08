@@ -11,6 +11,6 @@ description: Discovery and insight refiner - ingest raw ideas, map context, and 
 
 For each item, state assumptions explicitly:
 
-- File-path hunting: identify likely affected files (`bot.py`, `config.py`, `processor.py`, `vault.py`, `memory.py`, `transcriber.py`, `models.py`, `prompts/`). Use `docs/FLOW.md` to trace which pipeline stages and files an idea touches.
-- Technical logic check: validate against current stack (Python, python-telegram-bot, Pydantic AI, markdown vault).
+- File-path hunting: identify likely affected files (`app.py`, `config.py`, `recorder.py`, `transcriber.py`, `output.py`, `postprocessor.py`, `brain.py`, `modes.py`, the per-mode dictators `groq_dictator.py`/`cloud_dictator.py`/`cascade_dictator.py`, `shortcut.py` hotkey, `vad.py`). Trace which pipeline stage (capture → VAD → transcribe → post-process → output → vocabulary learning) an idea touches.
+- Technical logic check: validate against the current stack (Python, faster-whisper local + Groq/cloud backends, global hotkey, system-tray UI).
 - Ambiguity detection: flag vague phrases that cannot be executed reliably.

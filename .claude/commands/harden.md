@@ -4,7 +4,7 @@ description: Production-readiness audit — analyze code for safety, cleanup, an
 
 > See `.claude/commands/__common.md` for shared context.
 
-Production-readiness audit on the bot or a targeted area.
+Production-readiness audit on the transcriber app or a targeted area.
 
 Output: ranked findings table, severity-grouped hardening plan, feature list artifact.
 Do not implement code changes in this workflow.
@@ -16,8 +16,8 @@ Default `No Decision Needed` for evidence. Use `Decision Required` for hardening
 ## 1. Scope Selection
 
 Determine audit scope from user input:
-- **Full app**: no target specified — audit top-down from `bot.py` entry point. Use `docs/FLOW.md` as the pipeline map to ensure all stages are covered (input → auth → transcription → classification → action dispatch → vault write → confirmation → memory).
-- **Area**: subsystem (e.g., "processor", "vault", "config", "transcription").
+- **Full app**: no target specified — audit top-down from the `app.py` entry point across the pipeline: hotkey trigger → audio capture (`recorder.py`) → VAD (`vad.py`) → transcription (`transcriber.py` local / `groq_dictator.py` / `cloud_dictator.py` / `cascade_dictator.py` per mode) → post-processing (`postprocessor.py`) → output (`output.py`) → vocabulary learning (`brain.py`).
+- **Area**: subsystem (e.g., "recorder", "transcriber", "dictators", "output", "config", "brain").
 - **File**: one or more specific files.
 
 Confirm scope and classify size per `__common.md` Context Budget before proceeding.
@@ -26,22 +26,22 @@ Confirm scope and classify size per `__common.md` Context Budget before proceedi
 
 | Dimension | Focus |
 |-----------|-------|
-| **Security & Secrets** | Env var handling, no hardcoded secrets, Telegram user ID validation, input sanitization, file path traversal prevention |
-| **Error Handling** | Graceful degradation on API failures (Groq, Telegram), network timeouts, malformed input, missing vault dirs |
+| **Security & Secrets** | Provider API key handling (Groq/cloud) via config, no hardcoded secrets, no secrets leaked into `transcriber.log`, config-file permissions |
+| **Error Handling** | Graceful degradation on provider failures (Groq/cloud timeouts), model-load failure, mic/audio-device disconnect, clipboard write failure, empty/silent audio |
 | **Code Quality** | Dead code, unsafe patterns, debug artifacts (`print`/`breakpoint`), duplication, Python anti-patterns |
-| **Reliability** | Async correctness, signal handling, graceful shutdown, Docker health, restart behavior |
-| **Data Safety** | Vault write atomicity, no silent data loss, Git sync safety, concurrent write handling |
-| **Configuration** | All env vars validated at startup, sensible defaults, clear error messages for missing config |
+| **Reliability** | Threading correctness (capture loop + hotkey listener), graceful shutdown, recovery after a failed transcription, CUDA/GPU OOM handling, fallback between modes |
+| **Data Safety** | `brain.db` vocabulary write integrity, no silent loss of learned corrections, atomic config writes |
+| **Configuration** | `config.yaml` / `config.local.yaml` validated at startup, sensible defaults, clear error messages for a missing/invalid mode or provider |
 | **Testing** | Test coverage gaps, missing edge-case tests, test isolation |
-| **Deployment** | Dockerfile best practices, compose config, systemd service, log rotation |
+| **Packaging & Startup** | Autostart behavior, system-tray + recording-indicator init, icon/resource files present, pinned `requirements.txt` |
 
 ## 3. Evidence Gathering
 
 - **Grep sweeps**: `print(`, `breakpoint()`, `# TODO`, hardcoded API keys/tokens, `os.system(`.
-- **Syntax check**: `python -m py_compile` on all `.py` files.
+- **Syntax check**: `python -m py_compile` on all scoped `.py` files.
 - **Test run**: `pytest tests/ -v`.
-- **Docker build**: `docker compose build` (if Dockerfile in scope).
-- **Context7**: verify API usage only for findings that depend on external API behavior.
+- **Smoke**: `python app.py` boots, hotkey registers, tray icon + recording indicator appear (if startup is in scope).
+- **Context7**: verify API usage only for findings that depend on external API behavior (faster-whisper, Groq/cloud SDKs).
 
 Every finding must reference a specific `file:line`.
 

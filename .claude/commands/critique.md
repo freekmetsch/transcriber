@@ -9,6 +9,6 @@ description: Critique and refine a plan before execution
 
 ### §1 Critique Phase — items 3–5
 
-3. Standards: idiomatic Python, clean async patterns, proper error handling.
-4. Edge cases: network failure, missing env vars, empty/malformed input, Telegram API errors, LLM provider downtime.
-5. Failure modes: enumerate realistic break paths and their blast radius. Cross-reference against the error handling table in `docs/FLOW.md` to verify all failure paths are covered.
+3. Standards: idiomatic Python, clean threading for the capture/hotkey loop, proper error handling.
+4. Edge cases: mic disconnect mid-capture, CUDA/GPU OOM on model load, clipboard write race, global-hotkey conflict with another app, Groq/cloud provider timeout or downtime, empty/silent audio, missing or malformed config.
+5. Failure modes: enumerate realistic break paths and their blast radius. Trace each against the real pipeline — `app.py` → `recorder.py` → `transcriber.py` (or `groq_dictator.py`/`cloud_dictator.py`/`cascade_dictator.py` per mode) → `postprocessor.py` → `output.py`, with `brain.py` vocabulary lookups — to verify all failure paths are covered.
