@@ -11,7 +11,7 @@ AI-first software engineer. Optimize for model reasoning, regeneration, and debu
 
 ## Communication
 
-> Communication, decision, research, formatting, and policy rules: see global `~/.claude/commands/__common.md` (§Decision Filter, §Default Stance, §Universal Policies, §Unified Decision Communication Contract, §Research Discipline, §Self-Install Policy, §Formatting Conventions, §Starter Prompt Block).
+> Communication, decision, research, formatting, sustainability, and policy rules: see global `~/.claude/commands/__common.md` (§Decision Filter, §Default Stance, §Universal Policies, §Unified Decision Communication Contract, §Research Discipline, §Self-Install Policy, §Formatting Conventions, §Starter Prompt Block, §Context Budget).
 > Repo-specific deltas below override only the listed item, not the structure.
 
 ## Project Stack
@@ -55,14 +55,10 @@ AI-first software engineer. Optimize for model reasoning, regeneration, and debu
 - `docs/feature-lists/FEATURE_LIST_TRANSCRIBER.md` — master plan (5 phases).
 - `docs/braindumps/` — user intent source (if any).
 
-## Lane Authority (Critical)
-Folder location is the source of truth for active vs historical state:
-- `docs/feature-lists/` = active feature lists.
-- `docs/feature-lists/archive/` = historical feature lists.
+## Lane Authority
+Invariant + the shared `docs/feature-lists/` (active) / `docs/feature-lists/archive/` (historical) lane: global `~/.claude/commands/__common.md` §Lane Authority. Repo-specific lanes:
 - `docs/braindumps/` = active user intent (unprocessed ideas, feature requests).
 - `docs/braindumps/archive/` = processed braindumps (implemented or tracked in a feature list).
-
-In-file status text and checkboxes are secondary metadata and must never override folder location.
 
 ## Workflows
 Canonical definitions: `.claude/commands/*.md`. Local wrappers must not override.
@@ -88,17 +84,14 @@ Default state for unfinished work is active, not backlog. Do not move active wor
 
 When a workflow introduces a new tool, library, service, or framework, follow the Stack Discipline Protocol at `~/.claude/commands/__base-stack-discipline.md`.
 
-The protocol fires on its trigger categories (auth, payments, observability, hosting, ORM/DB, real-time, caching, email, file storage, forms, styling, state mgmt, background jobs, data fetching, feature flags). If uncertain whether a task touches a trigger category, run the protocol — skipping requires confidence the task is outside all categories.
+The protocol fires on its trigger categories (auth, payments, observability, hosting, ORM/DB, etc. — full list in the protocol). If uncertain whether a task touches a trigger category, run the protocol — skipping requires confidence the task is outside all categories.
 
 Established preferences in `C:\Users\metsc\.claude\projects\C--Users-metsc-Cloned-Repositories-second-brain\memory\MEMORY.md` are defaults, not absolutes — verify use-case fit before applying.
 
 ## Risk Tiers
-| Tier | Scope | Required Controls |
-|------|-------|-------------------|
-| R0 | docs/copy/cosmetic | targeted verification |
-| R1 | localized code, low blast radius | + manual smoke test |
-| R2 | shared logic/data/config | + `python -m py_compile` on changed files |
-| R3 | vocabulary DB structure/destructive/irreversible | + mandatory `/critique`, user go/no-go, rollback plan |
+Default R0–R3 ladder: global `~/.claude/commands/__common.md` §Risk Tiers (default ladder). Repo deltas only:
+- **R2** — verification command = `python -m py_compile` on changed files.
+- **R3** — trigger scope here = vocabulary DB structure change / destructive / irreversible.
 
 ## Verification Commands
 | Check | Command | When |
@@ -125,6 +118,4 @@ Project skills in `.claude/skills/` — MUST be consulted when working in that a
 - For AWAITING VERIFICATION, check in with user before moving.
 
 ## Scope Discipline
-- Execute the approved plan directly; avoid workflow overhead.
-- Do not create extra planning artifacts unless blocked.
-- Keep progress updates short and action-oriented.
+See global `~/.claude/commands/__common.md` §Scope Discipline.
