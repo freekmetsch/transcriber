@@ -3,7 +3,7 @@ description: Critique and refine a plan before execution
 ---
 
 > See `.claude/commands/__common.md` for repo context.
-> Base: `C:\Users\metsc\.claude\commands\__base-critique.md` — read and apply first.
+> Base: `C:\Users\metsc\.claude\commands\__base-review.md` — read and apply first. `/critique` forces PLAN mode.
 
 ## Repo Overrides
 
